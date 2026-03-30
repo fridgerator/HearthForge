@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HearthForge</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #242734;
+            --border: #2e3247;
+            --text: #e1e4ed;
+            --text-muted: #8b90a5;
+            --accent: #6c8cff;
+            --accent-hover: #5a7bff;
+            --success: #4ade80;
+            --error: #f87171;
+            --warning: #fbbf24;
+            --radius: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        /* Layout */
+        .app { display: flex; min-height: 100vh; }
+        .sidebar {
+            width: 240px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            padding: 20px 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-header {
+            padding: 0 20px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .sidebar-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .sidebar-header .user-info {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+        .sidebar-nav { flex: 1; padding: 12px 0; }
+        .sidebar-nav button {
+            display: block;
+            width: 100%;
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 14px;
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .sidebar-nav button:hover { color: var(--text); background: var(--surface2); }
+        .sidebar-nav button.active { color: var(--accent); background: var(--surface2); }
+        .sidebar-footer {
+            padding: 12px 20px;
+            border-top: 1px solid var(--border);
+        }
+        .sidebar-footer button {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .sidebar-footer button:hover { color: var(--error); }
+
+        .main { flex: 1; padding: 32px; max-width: 900px; }
+        .main h2 { font-size: 22px; font-weight: 600; margin-bottom: 20px; }
+
+        /* Common Elements */
+        input, textarea {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 10px 14px;
+            font-size: 14px;
+            width: 100%;
+            font-family: inherit;
+        }
+        input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+
+        .btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .btn:hover { background: var(--accent-hover); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+        .btn-danger { background: var(--error); }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+        .btn-ghost:hover { color: var(--text); border-color: var(--text-muted); }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-running { background: rgba(108,140,255,0.15); color: var(--accent); }
+        .badge-completed { background: rgba(74,222,128,0.15); color: var(--success); }
+        .badge-failed { background: rgba(248,113,113,0.15); color: var(--error); }
+        .badge-pending { background: rgba(139,144,165,0.15); color: var(--text-muted); }
+
+        .result-output {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            white-space: pre-wrap;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .pref-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .pref-row:last-child { border-bottom: none; }
+        .pref-key { font-weight: 600; min-width: 150px; font-size: 13px; }
+        .pref-value { flex: 1; font-size: 13px; color: var(--text-muted); }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .empty-state p { margin-top: 8px; font-size: 14px; }
+
+        /* Login Page */
+        .login-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .login-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 40px;
+            width: 100%;
+            max-width: 380px;
+        }
+        .login-box h1 { text-align: center; margin-bottom: 8px; color: var(--accent); }
+        .login-box .subtitle { text-align: center; color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
+        .login-box .field { margin-bottom: 16px; }
+        .login-box label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+        .login-box .btn { width: 100%; margin-top: 8px; }
+        .login-error { color: var(--error); font-size: 13px; text-align: center; margin-top: 12px; }
+
+        /* Goal Input */
+        .goal-form { display: flex; gap: 8px; margin-bottom: 24px; }
+        .goal-form input { flex: 1; }
+
+        /* Polling indicator */
+        .polling-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            animation: pulse 1.5s ease-in-out infinite;
+            margin-right: 6px;
+        }
+        @keyframes pulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="login-screen" class="login-container">
+    <div class="login-box">
+        <h1>HearthForge</h1>
+        <p class="subtitle">Agent Orchestrator</p>
+        <div id="setup-notice" class="hidden" style="background:rgba(108,140,255,0.1);padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px;color:var(--accent);">
+            First time setup — create your admin account.
+        </div>
+        <div class="field">
+            <label>Username</label>
+            <input type="text" id="login-username" autocomplete="username">
+        </div>
+        <div class="field">
+            <label>Password</label>
+            <input type="password" id="login-password" autocomplete="current-password">
+        </div>
+        <div id="display-name-field" class="field hidden">
+            <label>Display Name</label>
+            <input type="text" id="login-display-name" placeholder="Optional">
+        </div>
+        <button class="btn" id="login-btn">Sign In</button>
+        <div id="login-error" class="login-error hidden"></div>
+    </div>
+</div>
+
+<!-- Main App -->
+<div id="app-screen" class="app hidden">
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h1>HearthForge</h1>
+            <div class="user-info" id="user-display"></div>
+        </div>
+        <div class="sidebar-nav">
+            <button class="active" data-page="goals">New Task</button>
+            <button data-page="jobs">Jobs</button>
+            <button data-page="workspaces">Workspace History</button>
+            <button data-page="memory">Memory</button>
+            <button data-page="preferences">Preferences</button>
+        </div>
+        <div class="sidebar-footer">
+            <button id="logout-btn">Sign Out</button>
+        </div>
+    </nav>
+    <main class="main">
+
+        <!-- Page: New Task -->
+        <div id="page-goals" class="page">
+            <h2>New Task</h2>
+            <div class="goal-form">
+                <input type="text" id="goal-input" placeholder="Describe what you want to accomplish...">
+                <button class="btn" id="goal-submit">Run</button>
+            </div>
+            <div id="goal-result"></div>
+        </div>
+
+        <!-- Page: Jobs -->
+        <div id="page-jobs" class="page hidden">
+            <h2>Jobs</h2>
+            <div id="jobs-list"></div>
+        </div>
+
+        <!-- Page: Workspaces -->
+        <div id="page-workspaces" class="page hidden">
+            <h2>Workspace History</h2>
+            <div id="workspaces-list"></div>
+        </div>
+
+        <!-- Page: Memory -->
+        <div id="page-memory" class="page hidden">
+            <h2>Memory</h2>
+            <div id="memory-content"></div>
+        </div>
+
+        <!-- Page: Preferences -->
+        <div id="page-preferences" class="page hidden">
+            <h2>Preferences</h2>
+            <div style="display:flex;gap:8px;margin-bottom:16px;">
+                <input type="text" id="pref-key" placeholder="Key (e.g. output_style)" style="width:200px;">
+                <input type="text" id="pref-value" placeholder="Value (e.g. concise, no fluff)" style="flex:1;">
+                <button class="btn btn-sm" id="pref-add">Add</button>
+            </div>
+            <div id="prefs-list"></div>
+        </div>
+
+    </main>
+</div>
+
+<script>
+const API = window.location.origin + '/api';
+let token = localStorage.getItem('hf_token');
+let currentUser = null;
+let pollTimer = null;
+let isSetupMode = false;
+
+// --- API Helpers ---
+async function api(path, opts = {}) {
+    const headers = { 'Content-Type': 'application/json', ...opts.headers };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(API + path, { ...opts, headers });
+    if (res.status === 401) { logout(); throw new Error('Unauthorized'); }
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+}
+
+// --- Auth ---
+async function checkAuth() {
+    if (!token) { await checkSetupMode(); showLogin(); return; }
+    try {
+        currentUser = await api('/auth/me');
+        showApp();
+    } catch {
+        token = null;
+        localStorage.removeItem('hf_token');
+        await checkSetupMode();
+        showLogin();
+    }
+}
+
+async function checkSetupMode() {
+    try {
+        const health = await fetch(API + '/health').then(r => r.json());
+        // Try to access /auth/me without token - if no users, setup mode
+        const res = await fetch(API + '/auth/me');
+        if (res.ok) {
+            const data = await res.json();
+            if (data.username === 'setup') {
+                isSetupMode = true;
+                document.getElementById('setup-notice').classList.remove('hidden');
+                document.getElementById('display-name-field').classList.remove('hidden');
+                document.getElementById('login-btn').textContent = 'Create Account';
+            }
+        }
+    } catch { /* server not reachable */ }
+}
+
+document.getElementById('login-btn').addEventListener('click', async () => {
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errEl = document.getElementById('login-error');
+    errEl.classList.add('hidden');
+
+    if (!username || !password) { errEl.textContent = 'Username and password required'; errEl.classList.remove('hidden'); return; }
+
+    try {
+        let data;
+        if (isSetupMode) {
+            const displayName = document.getElementById('login-display-name').value.trim();
+            data = await api('/auth/setup', {
+                method: 'POST',
+                body: JSON.stringify({ username, password, display_name: displayName || null }),
+            });
+        } else {
+            data = await api('/auth/login', {
+                method: 'POST',
+                body: JSON.stringify({ username, password }),
+            });
+        }
+        token = data.token;
+        localStorage.setItem('hf_token', token);
+        currentUser = { username: data.username, display_name: data.display_name };
+        showApp();
+    } catch (e) {
+        errEl.textContent = e.message;
+        errEl.classList.remove('hidden');
+    }
+});
+
+// Enter key on password field
+document.getElementById('login-password').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('login-btn').click();
+});
+
+document.getElementById('logout-btn').addEventListener('click', logout);
+function logout() {
+    token = null;
+    currentUser = null;
+    localStorage.removeItem('hf_token');
+    if (pollTimer) clearInterval(pollTimer);
+    showLogin();
+}
+
+function showLogin() {
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('app-screen').classList.add('hidden');
+}
+function showApp() {
+    document.getElementById('login-screen').classList.add('hidden');
+    document.getElementById('app-screen').classList.remove('hidden');
+    document.getElementById('user-display').textContent = currentUser?.display_name || currentUser?.username || '';
+    navigateTo('goals');
+}
+
+// --- Navigation ---
+document.querySelectorAll('.sidebar-nav button').forEach(btn => {
+    btn.addEventListener('click', () => navigateTo(btn.dataset.page));
+});
+
+function navigateTo(page) {
+    document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+    document.getElementById(`page-${page}`).classList.remove('hidden');
+    document.querySelectorAll('.sidebar-nav button').forEach(b => b.classList.remove('active'));
+    document.querySelector(`.sidebar-nav button[data-page="${page}"]`).classList.add('active');
+
+    if (page === 'jobs') loadJobs();
+    if (page === 'workspaces') loadWorkspaces();
+    if (page === 'memory') loadMemory();
+    if (page === 'preferences') loadPreferences();
+}
+
+// --- Goals ---
+document.getElementById('goal-submit').addEventListener('click', submitGoal);
+document.getElementById('goal-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitGoal();
+});
+
+async function submitGoal() {
+    const input = document.getElementById('goal-input');
+    const goal = input.value.trim();
+    if (!goal) return;
+
+    const btn = document.getElementById('goal-submit');
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+
+    try {
+        const job = await api('/jobs', {
+            method: 'POST',
+            body: JSON.stringify({ goal }),
+        });
+        input.value = '';
+        showJobProgress(job.job_id);
+    } catch (e) {
+        document.getElementById('goal-result').innerHTML =
+            `<div class="card" style="border-color:var(--error)">Error: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run';
+    }
+}
+
+function showJobProgress(jobId) {
+    const container = document.getElementById('goal-result');
+    container.innerHTML = `<div class="card"><span class="polling-dot"></span> Running... (Job: ${jobId})</div>`;
+
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+        try {
+            const job = await api(`/jobs/${jobId}`);
+            if (job.status === 'completed') {
+                clearInterval(pollTimer);
+                container.innerHTML = `
+                    <div class="card">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                            <span class="badge badge-completed">Completed</span>
+                            <span style="font-size:12px;color:var(--text-muted)">
+                                ${job.result.completed_tasks}/${job.result.total_tasks} tasks · ${job.result.elapsed_seconds.toFixed(1)}s
+                            </span>
+                        </div>
+                        <div class="result-output">${escapeHtml(job.result.final_output)}</div>
+                    </div>`;
+            } else if (job.status === 'failed') {
+                clearInterval(pollTimer);
+                container.innerHTML = `
+                    <div class="card" style="border-color:var(--error)">
+                        <span class="badge badge-failed">Failed</span>
+                        <pre style="margin-top:8px;color:var(--error);font-size:13px;">${escapeHtml(job.error || 'Unknown error')}</pre>
+                    </div>`;
+            }
+        } catch { /* keep polling */ }
+    }, 2000);
+}
+
+// --- Jobs ---
+async function loadJobs() {
+    try {
+        const jobs = await api('/jobs');
+        const container = document.getElementById('jobs-list');
+        if (!jobs.length) {
+            container.innerHTML = '<div class="empty-state"><p>No jobs yet. Submit a task to get started.</p></div>';
+            return;
+        }
+        container.innerHTML = jobs.map(j => `
+            <div class="card" style="cursor:pointer" onclick="viewJob('${j.job_id}')">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span class="badge badge-${j.status}">${j.status}</span>
+                    <span style="font-size:12px;color:var(--text-muted)">${new Date(j.created_at).toLocaleString()}</span>
+                </div>
+                <p style="margin-top:8px;font-size:14px;">${escapeHtml(j.goal)}</p>
+            </div>
+        `).join('');
+    } catch (e) {
+        document.getElementById('jobs-list').innerHTML = `<div class="card">Error loading jobs: ${e.message}</div>`;
+    }
+}
+
+async function viewJob(jobId) {
+    try {
+        const job = await api(`/jobs/${jobId}`);
+        const container = document.getElementById('jobs-list');
+        let html = `
+            <button class="btn btn-ghost btn-sm" onclick="loadJobs()" style="margin-bottom:16px;">← Back</button>
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                    <span class="badge badge-${job.status}">${job.status}</span>
+                    <span style="font-size:12px;color:var(--text-muted)">Job: ${job.job_id}</span>
+                </div>
+                <p style="font-weight:600;margin-bottom:12px;">${escapeHtml(job.goal)}</p>`;
+
+        if (job.result) {
+            html += `
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">
+                    ${job.result.completed_tasks}/${job.result.total_tasks} tasks · ${job.result.elapsed_seconds.toFixed(1)}s
+                </p>
+                <div class="result-output">${escapeHtml(job.result.final_output)}</div>`;
+        }
+        if (job.error) {
+            html += `<pre style="margin-top:8px;color:var(--error);font-size:13px;">${escapeHtml(job.error)}</pre>`;
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    } catch (e) {
+        document.getElementById('jobs-list').innerHTML = `<div class="card">Error: ${e.message}</div>`;
+    }
+}
+
+// --- Workspaces ---
+async function loadWorkspaces() {
+    try {
+        const workspaces = await api('/workspaces');
+        const container = document.getElementById('workspaces-list');
+        if (!workspaces.length) {
+            container.innerHTML = '<div class="empty-state"><p>No workspace runs found.</p></div>';
+            return;
+        }
+        container.innerHTML = workspaces.map(w => `
+            <div class="card" style="cursor:pointer" onclick="viewWorkspace('${w.run_id}')">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-size:12px;font-family:monospace;color:var(--text-muted)">${w.run_id}</span>
+                    ${w.has_result ? '<span class="badge badge-completed">has result</span>' : '<span class="badge badge-pending">no result</span>'}
+                </div>
+                ${w.goal ? `<p style="margin-top:8px;font-size:14px;">${escapeHtml(w.goal)}</p>` : ''}
+            </div>
+        `).join('');
+    } catch (e) {
+        document.getElementById('workspaces-list').innerHTML = `<div class="card">Error: ${e.message}</div>`;
+    }
+}
+
+async function viewWorkspace(runId) {
+    try {
+        const ws = await api(`/workspaces/${runId}`);
+        const container = document.getElementById('workspaces-list');
+        let html = `
+            <button class="btn btn-ghost btn-sm" onclick="loadWorkspaces()" style="margin-bottom:16px;">← Back</button>
+            <div class="card">
+                <p style="font-size:12px;font-family:monospace;color:var(--text-muted);margin-bottom:8px;">${runId}</p>
+                ${ws.goal ? `<p style="font-weight:600;margin-bottom:12px;">${escapeHtml(ws.goal)}</p>` : ''}
+                ${ws.result ? `<div class="result-output">${escapeHtml(ws.result)}</div>` : '<p style="color:var(--text-muted)">No result file.</p>'}
+            </div>`;
+
+        if (ws.tasks) {
+            html += '<h3 style="margin:16px 0 8px;font-size:16px;">Tasks</h3>';
+            for (const [taskId, info] of Object.entries(ws.tasks)) {
+                const status = info.status?.status || 'unknown';
+                const name = info.status?.name || taskId;
+                html += `<div class="card">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-weight:600;font-size:13px;">[${taskId}] ${escapeHtml(name)}</span>
+                        <span class="badge badge-${status}">${status}</span>
+                    </div>
+                    ${info.output ? `<details><summary style="cursor:pointer;font-size:12px;color:var(--text-muted);">Show output (${info.output.length} chars)</summary><div class="result-output" style="margin-top:8px;max-height:200px;">${escapeHtml(info.output)}</div></details>` : ''}
+                    ${info.status?.error ? `<p style="color:var(--error);font-size:12px;margin-top:4px;">Error: ${escapeHtml(info.status.error)}</p>` : ''}
+                </div>`;
+            }
+        }
+        container.innerHTML = html;
+    } catch (e) {
+        document.getElementById('workspaces-list').innerHTML = `<div class="card">Error: ${e.message}</div>`;
+    }
+}
+
+// --- Memory ---
+async function loadMemory() {
+    try {
+        const mem = await api('/memory');
+        const container = document.getElementById('memory-content');
+        let html = '';
+
+        html += `<div class="card"><h3 style="font-size:14px;margin-bottom:8px;">Tool Knowledge (${mem.tool_knowledge.length})</h3>`;
+        if (mem.tool_knowledge.length) {
+            mem.tool_knowledge.forEach(tk => {
+                html += `<div class="pref-row">
+                    <span class="pref-key">${escapeHtml(tk.source)}</span>
+                    <span class="pref-value">${escapeHtml(tk.fact)}</span>
+                    <button class="btn btn-sm btn-danger" onclick="deleteToolKnowledge('${escapeHtml(tk.source)}')">×</button>
+                </div>`;
+            });
+        } else { html += '<p style="color:var(--text-muted);font-size:13px;">None yet. Tool knowledge is learned automatically from API failures.</p>'; }
+        html += '</div>';
+
+        html += `<div class="card"><h3 style="font-size:14px;margin-bottom:8px;">Run History (${mem.history_count} entries)</h3>`;
+        if (mem.history.length) {
+            mem.history.slice().reverse().slice(0, 15).forEach(h => {
+                const badge = h.outcome === 'success' ? 'completed' : h.outcome === 'partial' ? 'warning' : 'failed';
+                html += `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
+                    <span class="badge badge-${badge}">${h.outcome}</span>
+                    <span style="color:var(--text-muted);margin:0 8px;">${h.timestamp.slice(0,16)}</span>
+                    ${escapeHtml(h.goal)}
+                </div>`;
+            });
+        } else { html += '<p style="color:var(--text-muted);font-size:13px;">No history yet.</p>'; }
+        html += '</div>';
+
+        container.innerHTML = html;
+    } catch (e) {
+        document.getElementById('memory-content').innerHTML = `<div class="card">Error: ${e.message}</div>`;
+    }
+}
+
+async function deleteToolKnowledge(source) {
+    try {
+        await api(`/memory/tool-knowledge/${source}`, { method: 'DELETE' });
+        loadMemory();
+    } catch (e) { alert(e.message); }
+}
+
+// --- Preferences ---
+async function loadPreferences() {
+    try {
+        const mem = await api('/memory');
+        const container = document.getElementById('prefs-list');
+        if (!mem.preferences.length) {
+            container.innerHTML = '<div class="empty-state"><p>No preferences set. Add one above.</p></div>';
+            return;
+        }
+        container.innerHTML = mem.preferences.map(p => `
+            <div class="pref-row">
+                <span class="pref-key">${escapeHtml(p.key)}</span>
+                <span class="pref-value">${escapeHtml(p.value)}</span>
+                <button class="btn btn-sm btn-danger" onclick="deletePref('${escapeHtml(p.key)}')">×</button>
+            </div>
+        `).join('');
+    } catch (e) {
+        document.getElementById('prefs-list').innerHTML = `<div class="card">Error: ${e.message}</div>`;
+    }
+}
+
+document.getElementById('pref-add').addEventListener('click', async () => {
+    const key = document.getElementById('pref-key').value.trim();
+    const value = document.getElementById('pref-value').value.trim();
+    if (!key || !value) return;
+    try {
+        await api('/memory/preferences', { method: 'POST', body: JSON.stringify({ key, value }) });
+        document.getElementById('pref-key').value = '';
+        document.getElementById('pref-value').value = '';
+        loadPreferences();
+    } catch (e) { alert(e.message); }
+});
+
+async function deletePref(key) {
+    try {
+        await api(`/memory/preferences/${key}`, { method: 'DELETE' });
+        loadPreferences();
+    } catch (e) { alert(e.message); }
+}
+
+// --- Helpers ---
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// --- Init ---
+checkAuth();
+</script>
+</body>
+</html>

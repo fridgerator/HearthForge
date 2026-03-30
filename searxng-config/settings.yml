@@ -1,0 +1,65 @@
+# SearXNG settings for HearthForge
+# This config enables JSON API output and disables rate limiting
+# since we're calling it from our own tool agent, not serving public traffic.
+#
+# Docs: https://docs.searxng.org/admin/settings.html
+
+use_default_settings: true
+
+general:
+  instance_name: "HearthForge Search"
+  debug: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json    # Required for the tool agent to consume results
+
+server:
+  secret_key: "hearthforge-searxng-secret-change-in-production"
+  limiter: false       # No rate limiting for local use
+  image_proxy: false
+  port: 8080
+  bind_address: "0.0.0.0"
+
+# Valkey connection for caching
+valkey:
+  url: "redis://valkey:6379/0"
+
+# Engine configuration — enable the most useful engines
+# for finding API documentation and code examples
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+
+  - name: github
+    engine: github
+    shortcut: gh
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+
+  # Disabled engines — these require Tor or have been removed
+  - name: ahmia
+    disabled: true
+
+  - name: torch
+    disabled: true
