@@ -558,7 +558,10 @@ if STATIC_DIR.exists():
 # --- Server Entry Point ---
 
 if __name__ == "__main__":
+    import os
     import uvicorn
+
+    debug_logging = os.getenv("HEARTHFORGE_DEBUG_HTTP", "").lower() in ("1", "true")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -573,4 +576,5 @@ if __name__ == "__main__":
         port=SERVER_PORT,
         reload=False,
         log_level="info",
+        access_log=debug_logging,
     )

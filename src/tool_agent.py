@@ -34,7 +34,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from config import AGENT_TEMPERATURES, MAX_RETRIES, SEARXNG_SEARCH_FIRST, TASK_TIMEOUT_SECONDS
+from config import AGENT_TEMPERATURES, MAX_RETRIES, SEARXNG_SEARCH_FIRST, SEARXNG_URL, TASK_TIMEOUT_SECONDS
 from models import TaskNode, TaskStatus
 from ollama_client import OllamaClient
 from prompts import get_agent_prompt
@@ -166,6 +166,11 @@ class ToolAgent:
 
                 result_len = len(task.result)
                 logger.info(f"  ✓ [{task.id}] Data fetched on attempt {attempt} ({result_len} chars)")
+
+                # Learn from success: save working endpoints to memory
+                if self.memory and script:
+                    self._record_working_endpoints(task, script)
+
                 break
 
             except Exception as e:
@@ -217,6 +222,14 @@ class ToolAgent:
 
         parts = [f"## Task: {task.name}\n\n{task.description}"]
 
+        # Always tell the LLM about SearXNG so it can use it for web searches
+        if self.search:
+            parts.append(
+                f"\n\n## Available Services\n"
+                f"- SearXNG web search: GET {SEARXNG_URL}/search?q=<query>&format=json&language=en\n"
+                f"  Use this when you need to search the web for current information, not just APIs."
+            )
+
         # Search-native: search for current API docs before writing the script
         if SEARXNG_SEARCH_FIRST and self.search:
             search_results = await self._search_for_api_info(task)
@@ -252,6 +265,14 @@ class ToolAgent:
         temperature = AGENT_TEMPERATURES.get("tool", 0.2)
 
         parts = [f"## Task: {task.name}\n\n{task.description}"]
+
+        # Always tell the LLM about SearXNG so it can use it for web searches
+        if self.search:
+            parts.append(
+                f"\n\n## Available Services\n"
+                f"- SearXNG web search: GET {SEARXNG_URL}/search?q=<query>&format=json&language=en\n"
+                f"  Use this when you need to search the web for current information, not just APIs."
+            )
 
         # Always search on retries — the failure likely means stale API knowledge
         if self.search:
@@ -460,6 +481,69 @@ class ToolAgent:
         log_path = workspace_dir / "attempts.json"
         log_path.write_text(json.dumps(log, indent=2))
         logger.debug(f"  🔧 [{task.id}] Attempt log saved to {log_path}")
+
+    def _record_working_endpoints(self, task: TaskNode, script: str) -> None:
+        """
+        Extract API endpoints from a successful script and save them to memory.
+        This builds a dynamic knowledge base of confirmed working endpoints over time,
+        so future runs don't have to re-discover them through search or trial-and-error.
+        """
+        from urllib.parse import urlparse
+
+        # Parse SEARXNG_URL once so we can skip it
+        searxng_host = urlparse(SEARXNG_URL).netloc.lower()
+
+        urls = re.findall(r'https?://[^\s\'"\\)},]+', script)
+        seen = set()
+        for url in urls:
+            # Strip any trailing punctuation that got captured
+            url = url.rstrip(".,;:")
+            try:
+                parsed = urlparse(url)
+                if not parsed.netloc or parsed.path in ("", "/"):
+                    continue
+                # Skip SearXNG itself — it's infrastructure, not a learned endpoint
+                if parsed.netloc.lower() == searxng_host:
+                    continue
+                # Build a stable base key: scheme + netloc + path (no query string)
+                base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                if base in seen:
+                    continue
+                seen.add(base)
+                source = self._source_from_domain(parsed.netloc)
+                fact = f"Working endpoint confirmed: {base}"
+                self.memory.add_tool_knowledge(source=source, fact=fact, confidence="confirmed")
+                logger.debug(f"  📚 [{task.id}] Recorded working endpoint: {base}")
+            except Exception:
+                continue
+
+    def _source_from_domain(self, domain: str) -> str:
+        """Map a hostname to a short source identifier for memory storage."""
+        domain_lower = domain.lower()
+        known = [
+            ("coingecko", "coingecko"),
+            ("finance.yahoo", "yahoo_finance"),
+            ("yahoo", "yahoo_finance"),
+            ("open-meteo", "open_meteo"),
+            ("openmeteo", "open_meteo"),
+            ("wikipedia", "wikipedia"),
+            ("coinbase", "coinbase"),
+            ("binance", "binance"),
+            ("alpha-vantage", "alpha_vantage"),
+            ("alphavantage", "alpha_vantage"),
+            ("finnhub", "finnhub"),
+            ("polygon.io", "polygon"),
+            ("newsapi", "newsapi"),
+            ("openweathermap", "openweathermap"),
+            ("github", "github"),
+            ("reddit", "reddit"),
+        ]
+        for keyword, source_id in known:
+            if keyword in domain_lower:
+                return source_id
+        # Fallback: use the second-level domain (e.g. "api.example.com" → "example")
+        parts = domain_lower.rstrip(".").split(".")
+        return parts[-2] if len(parts) >= 2 else domain_lower
 
     async def _execute_script(self, script: str) -> tuple[str, str, int]:
         """

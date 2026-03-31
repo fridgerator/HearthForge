@@ -18,11 +18,12 @@ AVAILABLE AGENT TYPES:
 - write: Produce polished written content (reports, emails, documents).
 - code: Write code for software projects, scripts, utilities.
 - summarize: Distill information into a concise, actionable summary.
-- tool: Fetch LIVE external data that the LLM does not have. Use this when the task requires
-  current/real-time information such as stock prices, weather, API data, web content, crypto
-  prices, exchange rates, or any data that changes over time. The tool agent will write and
-  execute a Python script to retrieve the data. ALWAYS place tool tasks before any analyze
-  or research tasks that depend on that live data.
+- tool: Fetch LIVE external data or web content that the LLM does not have. Use this when
+  the task requires current/real-time information such as stock prices, weather, API data,
+  crypto prices, exchange rates, news, reviews, travel info, or ANY data that changes over
+  time or requires searching the web. The tool agent will write and execute a Python script
+  to retrieve the data, and has access to a local SearXNG instance for web searches.
+  ALWAYS place tool tasks before any analyze or research tasks that depend on that live data.
 
 RULES:
 - Each task must be a single, focused unit of work
@@ -30,18 +31,26 @@ RULES:
 - Tasks with no dependencies can run in parallel
 - Always include a final "synthesize" or "summarize" task that depends on all prior tasks
 - Keep task count reasonable (3-8 tasks for most goals)
-- For tool tasks, the description MUST specify exactly what data to fetch, from what source,
-  and what format to output (JSON preferred). Be specific about URLs, ticker symbols, date
-  ranges, etc.
-- If a goal requires live data, the tool task(s) MUST come first with no dependencies,
-  and analysis tasks MUST depend on the tool task(s)
+- For tool tasks, the description MUST specify exactly what data to fetch and what format
+  to output (JSON preferred). Be specific: ticker symbols, date ranges, location names,
+  search terms, etc. For web searches, specify the search query to use.
+- If a goal requires live data OR current web information, tool task(s) MUST come first
+  with no dependencies, and analysis/research/write tasks MUST depend on them.
+- Use a tool task any time the answer requires fetching from the web, even for non-API
+  queries like "find current prices", "search for reviews", or "get recent news".
 
-EXAMPLE - stock analysis goal would produce:
-  t1 (tool): "Fetch NVDA daily price history for the last 6 months from Yahoo Finance. Output JSON with date, open, high, low, close, volume."
+EXAMPLE - stock analysis goal:
+  t1 (tool): "Fetch NVDA daily OHLCV price history for the last 6 months from Yahoo Finance. Output JSON with date, open, high, low, close, volume."
   t2 (tool): "Fetch NVDA key fundamentals (P/E, EPS, market cap, revenue) from Yahoo Finance. Output JSON."
   t3 (analyze, depends t1): "Perform technical analysis on the price data..."
   t4 (analyze, depends t2): "Perform fundamental analysis..."
   t5 (summarize, depends t3,t4): "Synthesize into trade thesis..."
+
+EXAMPLE - travel/lifestyle goal ("budget family vacations to Hawaii"):
+  t1 (tool): "Search the web for 'budget family vacation Hawaii 2026 tips costs' and fetch the top results. Return a JSON summary of key recommendations, estimated costs, and tips."
+  t2 (tool): "Search the web for 'cheap flights Hawaii family deals' and 'affordable Hawaii hotels families'. Return JSON with current price ranges and booking tips."
+  t3 (analyze, depends t1,t2): "Analyze the fetched data and identify the best budget strategies..."
+  t4 (write, depends t3): "Write a practical guide for budget family vacations to Hawaii..."
 
 Respond with ONLY valid JSON matching this schema (no markdown, no explanation):
 {
@@ -152,28 +161,69 @@ CRITICAL RULES:
 - Handle errors gracefully - if a request fails, print a JSON object with an "error" key.
 - Include a timeout on all HTTP requests (10 second default).
 - Do NOT prompt for user input. The script must run non-interactively.
-- If fetching from an API that requires no auth key, prefer that. Common free APIs:
-    - Yahoo Finance: query2.finance.yahoo.com (no key needed)
-    - CoinGecko: api.coingecko.com/api/v3 (no key for basic endpoints)
-    - Open-Meteo: api.open-meteo.com (no key needed)
-    - Wikipedia API: en.wikipedia.org/api/rest_v1
-- If an API key would be required, print {"error": "API key required for <service>"}.
+- ALWAYS include a User-Agent header on HTTP requests — many APIs block requests without one.
+- If fetching from an API that requires no auth key, prefer that. Reliable free sources:
+    - Yahoo Finance (stock/crypto data, no key): query2.finance.yahoo.com
+        Price history: /v8/finance/chart/{ticker}?range=6mo&interval=1d
+        Fundamentals: /v10/finance/quoteSummary/{ticker}?modules=price,summaryDetail,defaultKeyStatistics
+        IMPORTANT: Always include headers={"User-Agent": "Mozilla/5.0"} or you will get 401/429 errors.
+    - CoinGecko (crypto, no key for basic): api.coingecko.com/api/v3
+        Simple price: /simple/price?ids=bitcoin&vs_currencies=usd
+        Market chart: /coins/{id}/market_chart?vs_currency=usd&days=30
+    - Open-Meteo (weather, no key): api.open-meteo.com/v1/forecast
+    - Wikipedia REST API (no key): en.wikipedia.org/api/rest_v1
+    - SearXNG (web search): see "Available Services" section below — use for general web queries
+- If an API key would be required, try SearXNG or another free source before giving up.
 - Keep the script focused - fetch exactly what was requested, nothing more.
 
-EXAMPLE OUTPUT FORMAT:
+FOR WEB SEARCHES (non-API queries like travel, news, reviews, recommendations):
+Use the SearXNG instance listed in "Available Services" to search the web, then optionally
+fetch the top result URLs with requests to extract their text content.
+
+EXAMPLE — stock data with correct Yahoo Finance headers:
 ```python
 import requests
 import json
+from datetime import datetime
 
-url = "https://query2.finance.yahoo.com/v8/finance/chart/NVDA?range=6mo&interval=1d"
-headers = {"User-Agent": "Mozilla/5.0"}
+ticker = "NVDA"
+url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?range=6mo&interval=1d"
+headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 try:
     resp = requests.get(url, headers=headers, timeout=10)
     resp.raise_for_status()
     data = resp.json()
-    # ... extract and reshape data ...
+    chart = data["chart"]["result"][0]
+    timestamps = chart["timestamp"]
+    ohlcv = chart["indicators"]["quote"][0]
+    result = [
+        {"date": str(datetime.fromtimestamp(ts).date()), "close": c}
+        for ts, c in zip(timestamps, ohlcv["close"]) if c is not None
+    ]
     print(json.dumps(result, indent=2))
+except Exception as e:
+    print(json.dumps({"error": str(e)}))
+```
+
+EXAMPLE — web search using SearXNG:
+```python
+import requests
+import json
+
+searxng_url = "http://localhost:8080/search"  # URL provided in task context
+params = {"q": "budget family vacation Hawaii 2026", "format": "json", "language": "en"}
+headers = {"User-Agent": "Mozilla/5.0"}
+
+try:
+    resp = requests.get(searxng_url, params=params, headers=headers, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    results = [
+        {"title": r["title"], "url": r["url"], "snippet": r.get("content", "")}
+        for r in data.get("results", [])[:5]
+    ]
+    print(json.dumps(results, indent=2))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
 ```

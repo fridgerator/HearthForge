@@ -13,10 +13,11 @@ Default endpoint: http://localhost:8080
 """
 
 import logging
+import re
 
 import httpx
 
-from config import SEARXNG_URL
+from config import PAGE_FETCH_MAX_CHARS, PAGE_FETCH_MAX_RESULTS, PAGE_FETCH_TIMEOUT, SEARXNG_URL
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,11 @@ class SearchClient:
         if not results:
             return ""
 
-        # Step 3: Format for prompt injection
+        # Step 3: Fetch page content for the top N results
+        if PAGE_FETCH_MAX_RESULTS > 0:
+            await self._enrich_with_page_content(results)
+
+        # Step 4: Format for prompt injection
         return self._format_results(query, results)
 
     async def _llm_formulate_query(self, task_description: str, llm_client) -> str:
@@ -178,6 +183,76 @@ class SearchClient:
 
         return " ".join(parts)
 
+    async def _enrich_with_page_content(self, results: list[dict]) -> None:
+        """
+        Fetch actual page content for the top N results and attach it to each
+        result dict as a "page_content" key. Mutates results in-place.
+
+        This is the key improvement over snippet-only search: the LLM gets
+        real documentation text (endpoint paths, parameter names, response
+        schemas) instead of a 2-sentence snippet.
+        """
+        import asyncio
+
+        async def fetch_one(result: dict) -> None:
+            url = result.get("url", "")
+            if not url:
+                return
+            content = await self._fetch_page_content(url)
+            if content:
+                result["page_content"] = content
+
+        await asyncio.gather(*[fetch_one(r) for r in results[:PAGE_FETCH_MAX_RESULTS]])
+
+    async def _fetch_page_content(self, url: str) -> str:
+        """
+        Fetch a URL and extract readable text. Returns empty string on any failure.
+        Skips non-HTML content (PDFs, images, binary data).
+        """
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; HearthForge/1.0; +research)"}
+            response = await self._client.get(
+                url,
+                headers=headers,
+                follow_redirects=True,
+                timeout=PAGE_FETCH_TIMEOUT,
+            )
+            if response.status_code != 200:
+                return ""
+
+            content_type = response.headers.get("content-type", "").lower()
+            if "html" not in content_type and "text" not in content_type:
+                return ""
+
+            text = self._extract_text_from_html(response.text)
+            if len(text) < 100:  # Skip pages that returned almost nothing useful
+                return ""
+
+            logger.debug(f"Fetched {len(text)} chars from {url}")
+            return text[:PAGE_FETCH_MAX_CHARS]
+
+        except Exception as e:
+            logger.debug(f"Page fetch failed for {url}: {e}")
+            return ""
+
+    def _extract_text_from_html(self, html: str) -> str:
+        """Strip HTML tags and extract readable text. No external deps."""
+        # Remove script, style, nav, footer blocks — not useful for API docs
+        html = re.sub(
+            r"<(script|style|nav|footer|header|noscript)[^>]*>.*?</\1>",
+            " ",
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        # Remove all remaining tags
+        html = re.sub(r"<[^>]+>", " ", html)
+        # Decode common HTML entities
+        html = html.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        html = html.replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " ")
+        # Collapse whitespace
+        html = re.sub(r"\s+", " ", html).strip()
+        return html
+
     def _format_results(self, query: str, results: list[dict]) -> str:
         """Format search results for injection into the tool agent's prompt."""
         lines = [
@@ -188,8 +263,10 @@ class SearchClient:
         for i, r in enumerate(results, 1):
             lines.append(f"### Result {i}: {r['title']}")
             lines.append(f"URL: {r['url']}")
-            if r["snippet"]:
+            if r.get("snippet"):
                 lines.append(f"Snippet: {r['snippet']}")
+            if r.get("page_content"):
+                lines.append(f"Page content:\n{r['page_content']}")
             lines.append("")
 
         return "\n".join(lines)

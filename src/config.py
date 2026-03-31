@@ -49,6 +49,14 @@ SEARXNG_URL = os.getenv("HEARTHFORGE_SEARXNG_URL", "http://localhost:8080")
 # If False, tool agent only searches on retries after a failure.
 SEARXNG_SEARCH_FIRST = os.getenv("HEARTHFORGE_SEARCH_FIRST", "true").lower() == "true"
 
+# Page content fetching settings (used by the search client after getting results)
+# After searching, the client fetches and extracts text from the top N result pages.
+# This gives the tool agent actual API documentation instead of just snippets.
+# Set PAGE_FETCH_MAX_RESULTS=0 to disable page fetching (snippets only).
+PAGE_FETCH_MAX_RESULTS = int(os.getenv("HEARTHFORGE_PAGE_FETCH_MAX_RESULTS", "2"))
+PAGE_FETCH_TIMEOUT = float(os.getenv("HEARTHFORGE_PAGE_FETCH_TIMEOUT", "5.0"))
+PAGE_FETCH_MAX_CHARS = int(os.getenv("HEARTHFORGE_PAGE_FETCH_MAX_CHARS", "8000"))
+
 # Ollama generation parameters
 OLLAMA_OPTIONS = {
     "temperature": 0.3,       # Lower for more deterministic task planning
