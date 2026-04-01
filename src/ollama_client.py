@@ -21,13 +21,14 @@ class OllamaClient:
     ):
         self.host = host.rstrip("/")
         self.model = model
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(600.0))
 
     async def chat(
         self,
         system_prompt: str,
         user_message: str,
         temperature: float | None = None,
+        num_predict: int | None = None,
     ) -> str:
         """
         Send a chat completion request to Ollama.
@@ -36,6 +37,8 @@ class OllamaClient:
         options = {**OLLAMA_OPTIONS}
         if temperature is not None:
             options["temperature"] = temperature
+        if num_predict is not None:
+            options["num_predict"] = num_predict
 
         payload = {
             "model": self.model,

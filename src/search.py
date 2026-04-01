@@ -131,6 +131,7 @@ class SearchClient:
                 ),
                 user_message=task_description,
                 temperature=0.1,
+                num_predict=64,  # Only needs a short query, no need for full budget
             )
             query = response.strip().strip('"').strip("'")
             # Sanity check — if the LLM returned something too long, it's not a query
