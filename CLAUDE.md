@@ -20,8 +20,8 @@ User Goal → Orchestrator (brain) → Task DAG → Sub-Agents → Workspace (fi
 - **Tool Agent** (`src/tool_agent.py`): Writes and executes Python scripts to fetch live external data. Search-native: queries SearXNG for current API docs before writing scripts. Retries with error feedback — the LLM sees its previous script + the error and rewrites.
 - **Search Client** (`src/search.py`): Async SearXNG client. Uses LLM to formulate search queries from task descriptions, with heuristic fallback.
 - **Memory** (`src/memory.py`): Per-user JSON files at `~/.hearthforge/memory/{user_id}.json`. Three sections: rolling history (last N runs), persistent preferences, persistent tool knowledge. Injected into orchestrator/tool prompts.
-- **Server** (`src/server.py`): FastAPI with async job execution, JWT auth, REST API for jobs/memory/preferences/workspaces.
-- **Web UI** (`src/static/index.html`): Single-file vanilla JS frontend. Login, submit tasks, poll job progress, browse results, manage preferences/memory.
+- **Server** (`src/server.py`): FastAPI with async job execution, JWT auth, REST API for jobs/memory/preferences/workspaces. Serves the built React frontend from `frontend/dist/` with SPA fallback.
+- **Frontend** (`frontend/`): React + Vite + TypeScript SPA. Auth state via React Context, server data via TanStack Query (React Query v5). React Router v6 for client-side navigation. Proxies `/api` to the FastAPI server in dev mode (`npm run dev`).
 
 **Filesystem IPC pattern:** Agents communicate via workspace directories (`/tmp/hearthforge/{run_id}/tasks/{task_id}/`). Each task writes output.txt, status.json, and optionally script files and attempt logs. This makes everything inspectable and debuggable.
 
@@ -32,6 +32,17 @@ User Goal → Orchestrator (brain) → Task DAG → Sub-Agents → Workspace (fi
 - SearXNG (Docker) for web search
 - bcrypt + JWT for auth
 - No databases — JSON files for memory/auth, filesystem for workspace IPC
+- React 18 + Vite + TypeScript (frontend)
+- TanStack Query v5 (server state), React Context (auth), React Router v6 (routing)
+
+## Frontend Development
+
+```bash
+cd frontend
+npm install
+npm run dev      # dev server at :5173, proxies /api to :8742
+npm run build    # builds to frontend/dist/ (served by FastAPI in production)
+```
 
 ## Code Conventions
 

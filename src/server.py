@@ -543,16 +543,36 @@ async def health():
 
 # --- Static Files & SPA ---
 
-STATIC_DIR = Path(__file__).parent.parent / "static"
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 
-@app.get("/")
-async def serve_index():
-    """Serve the web UI."""
-    return FileResponse(STATIC_DIR / "index.html")
 
-# Mount static files for any additional assets (CSS, JS, images)
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+@app.get("/", include_in_schema=False)
+async def serve_root():
+    """Serve the React SPA index."""
+    index = FRONTEND_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index)
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(
+        "Frontend not built. Run: cd frontend && npm install && npm run build",
+        status_code=503,
+    )
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_spa(full_path: str):
+    """
+    SPA fallback — serve static assets directly, or index.html for any
+    unmatched path so React Router handles client-side navigation.
+    Must be defined AFTER all /api/* routes.
+    """
+    candidate = FRONTEND_DIR / full_path
+    if candidate.exists() and candidate.is_file():
+        return FileResponse(candidate)
+    index = FRONTEND_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index)
+    raise HTTPException(status_code=404)
 
 
 # --- Server Entry Point ---
