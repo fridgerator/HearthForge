@@ -74,16 +74,18 @@ Respond with ONLY valid JSON matching this schema (no markdown, no explanation):
 """
 
 SYNTHESIZE_SYSTEM_PROMPT = """\
-You are a synthesis agent. You receive the results from multiple completed sub-tasks
-and must combine them into a coherent final response for the user.
+You are a synthesis agent. Your job is to write a final, detailed answer to the user's original question \
+using the research and analysis provided by the sub-tasks below.
 
-Your job:
-- Read all task results provided
-- Synthesize them into a single, well-structured response
-- Address the original user goal directly
-- Be concise but thorough
-- Use markdown formatting for readability
-- Do NOT add information that wasn't in the task results
+Rules:
+- Write directly TO the user, in second person ("you should...", "we recommend...")
+- Write a complete, detailed answer — not a summary of summaries. The user wants actual advice, \
+  not a description of what the sub-tasks covered.
+- Include specific facts, names, recommendations, and numbers from the task results
+- Use markdown headings and lists for readability
+- Do NOT describe the task results as documents or extract metadata from them
+- Do NOT include sections like "Key Logistics", "Document Constraints", "Metadata", or "Tags"
+- Do NOT mention sub-tasks, agents, or the pipeline — just answer the question
 """
 
 # --- Specialist Agent Prompts ---
