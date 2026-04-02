@@ -23,9 +23,10 @@ from config import AGENT_TEMPERATURES, MAX_RETRIES
 from models import AgentType, TaskNode, TaskStatus
 
 # Agent types where Qwen3 thinking mode wastes tokens without benefit.
-# These tasks process large upstream context and need the full token budget
-# for output, not chain-of-thought reasoning.
-NO_THINK_AGENTS = {AgentType.ANALYZE, AgentType.WRITE, AgentType.SUMMARIZE}
+# Write/summarize tasks just reformat or condense existing content — they
+# don't need chain-of-thought. Analyze is excluded because it genuinely
+# needs reasoning to interpret data and extract insights.
+NO_THINK_AGENTS = {AgentType.WRITE, AgentType.SUMMARIZE}
 from ollama_client import OllamaClient
 from prompts import get_agent_prompt
 from tool_agent import ToolAgent
