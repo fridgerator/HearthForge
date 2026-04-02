@@ -192,8 +192,10 @@ CRITICAL RULES:
   The downstream agent needs insights, not raw data to re-process.
 
 FOR WEB SEARCHES (non-API queries like travel, news, reviews, recommendations):
-Use the SearXNG instance listed in "Available Services" to search the web, then optionally
-fetch the top result URLs with requests to extract their text content.
+Use the SearXNG instance listed in "Available Services" to search the web. Search snippets
+alone are almost never useful — you MUST also fetch the actual page content from the top 2-3
+result URLs using requests.get() and extract the text. Return the extracted page content,
+not just titles and snippets.
 
 EXAMPLE — stock data with summary computation (correct Yahoo Finance headers):
 ```python
@@ -238,24 +240,51 @@ except Exception as e:
     print(json.dumps({"error": str(e)}))
 ```
 
-EXAMPLE — web search using SearXNG:
+EXAMPLE — web search using SearXNG (ALWAYS fetch page content, not just snippets):
 ```python
 import requests
 import json
+import re
 
 searxng_url = "http://localhost:8080/search"  # URL provided in task context
-params = {"q": "budget family vacation Hawaii 2026", "format": "json", "language": "en"}
-headers = {"User-Agent": "Mozilla/5.0"}
+headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+def extract_text(html, max_chars=3000):
+    \"\"\"Strip HTML tags and return readable text.\"\"\"
+    for tag in ["script", "style", "nav", "footer", "header"]:
+        html = re.sub(f"<{tag}[^>]*>.*?</{tag}>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\\s+", " ", text).strip()
+    return text[:max_chars]
+
+def fetch_page(url):
+    \"\"\"Fetch a URL and extract readable text. Returns empty string on failure.\"\"\"
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200 and "html" in resp.headers.get("content-type", ""):
+            return extract_text(resp.text)
+    except Exception:
+        pass
+    return ""
 
 try:
+    # Step 1: Search
+    params = {"q": "budget family vacation Hawaii 2026", "format": "json", "language": "en"}
     resp = requests.get(searxng_url, params=params, headers=headers, timeout=10)
     resp.raise_for_status()
-    data = resp.json()
-    results = [
-        {"title": r["title"], "url": r["url"], "snippet": r.get("content", "")}
-        for r in data.get("results", [])[:5]
-    ]
-    print(json.dumps(results, indent=2))
+    search_results = resp.json().get("results", [])[:3]
+
+    # Step 2: Fetch actual page content from top results
+    output = []
+    for r in search_results:
+        page_text = fetch_page(r["url"])
+        output.append({
+            "title": r["title"],
+            "url": r["url"],
+            "content": page_text if page_text else r.get("content", "")
+        })
+
+    print(json.dumps(output, indent=2))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
 ```
