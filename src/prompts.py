@@ -34,13 +34,18 @@ RULES:
 - For tool tasks, the description MUST specify exactly what data to fetch and what format
   to output (JSON preferred). Be specific: ticker symbols, date ranges, location names,
   search terms, etc. For web searches, specify the search query to use.
+- IMPORTANT: Tool task descriptions MUST instruct the script to compute summary statistics
+  and output a CONDENSED result — not raw data dumps. For example, instead of outputting
+  every daily price for 6 months (~125 rows), the script should compute key metrics
+  (start/end price, % change, min, max, averages, moving averages, volatility) and output
+  a compact JSON summary. This keeps downstream tasks focused on analysis, not data wrangling.
 - If a goal requires live data OR current web information, tool task(s) MUST come first
   with no dependencies, and analysis/research/write tasks MUST depend on them.
 - Use a tool task any time the answer requires fetching from the web, even for non-API
   queries like "find current prices", "search for reviews", or "get recent news".
 
 EXAMPLE - stock analysis goal:
-  t1 (tool): "Fetch NVDA daily OHLCV price history for the last 6 months from Yahoo Finance. Output JSON with date, open, high, low, close, volume."
+  t1 (tool): "Fetch NVDA daily OHLCV data for the last 6 months from Yahoo Finance. In the script, compute and output a JSON summary with: ticker, period_start, period_end, start_price, end_price, pct_change, high, low, avg_close, avg_volume, volatility_stddev, 50d_moving_avg, 200d_moving_avg. Do NOT output raw daily rows."
   t2 (tool): "Fetch NVDA key fundamentals (P/E, EPS, market cap, revenue) from Yahoo Finance. Output JSON."
   t3 (analyze, depends t1): "Perform technical analysis on the price data..."
   t4 (analyze, depends t2): "Perform fundamental analysis..."
@@ -180,12 +185,17 @@ CRITICAL RULES:
     - SearXNG (web search): see "Available Services" section below — use for general web queries
 - If an API key would be required, try SearXNG or another free source before giving up.
 - Keep the script focused - fetch exactly what was requested, nothing more.
+- IMPORTANT: Your script's output will be read by another AI agent, not a human.
+  Compute summary statistics IN the script and output a compact JSON summary.
+  Do NOT dump raw data (e.g., hundreds of daily price rows). Instead, calculate
+  key metrics (totals, averages, percentages, min/max, trends) and output those.
+  The downstream agent needs insights, not raw data to re-process.
 
 FOR WEB SEARCHES (non-API queries like travel, news, reviews, recommendations):
 Use the SearXNG instance listed in "Available Services" to search the web, then optionally
 fetch the top result URLs with requests to extract their text content.
 
-EXAMPLE — stock data with correct Yahoo Finance headers:
+EXAMPLE — stock data with summary computation (correct Yahoo Finance headers):
 ```python
 import requests
 import json
@@ -202,11 +212,28 @@ try:
     chart = data["chart"]["result"][0]
     timestamps = chart["timestamp"]
     ohlcv = chart["indicators"]["quote"][0]
-    result = [
-        {"date": str(datetime.fromtimestamp(ts).date()), "close": c}
-        for ts, c in zip(timestamps, ohlcv["close"]) if c is not None
-    ]
-    print(json.dumps(result, indent=2))
+    closes = [c for c in ohlcv["close"] if c is not None]
+    dates = [str(datetime.fromtimestamp(ts).date()) for ts in timestamps]
+
+    # Compute summary instead of dumping raw rows
+    summary = {
+        "ticker": ticker,
+        "period_start": dates[0],
+        "period_end": dates[-1],
+        "start_price": round(closes[0], 2),
+        "end_price": round(closes[-1], 2),
+        "pct_change": round((closes[-1] - closes[0]) / closes[0] * 100, 2),
+        "high": round(max(closes), 2),
+        "low": round(min(closes), 2),
+        "avg_close": round(sum(closes) / len(closes), 2),
+        "volatility_stddev": round((sum((c - sum(closes)/len(closes))**2 for c in closes) / len(closes))**0.5, 2),
+        "data_points": len(closes),
+    }
+    if len(closes) >= 50:
+        summary["ma_50"] = round(sum(closes[-50:]) / 50, 2)
+    if len(closes) >= 200:
+        summary["ma_200"] = round(sum(closes[-200:]) / 200, 2)
+    print(json.dumps(summary, indent=2))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
 ```

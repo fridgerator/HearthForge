@@ -148,8 +148,8 @@ class SubAgent:
 
         if dependency_outputs:
             parts.append("\n\n## Context from prior tasks:\n")
-            for dep_id, output in dependency_outputs.items():
-                parts.append(f"### Results from task [{dep_id}]:\n{output}\n")
+            for dep_name, output in dependency_outputs.items():
+                parts.append(f"### Results from task [{dep_name}]:\n{output}\n")
 
         return "\n".join(parts)
 
