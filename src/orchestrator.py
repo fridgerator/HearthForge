@@ -200,6 +200,7 @@ class Orchestrator:
             )
 
         user_message = (
+            f"/no_think\n"  # Disable Qwen3 thinking mode — synthesis is writing, not reasoning
             f"Original goal: {goal}\n\n"
             f"Below are the results from {len(results)} completed sub-tasks. "
             f"Synthesize them into a single coherent response that addresses the original goal.\n\n"
