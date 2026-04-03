@@ -15,7 +15,7 @@ WORKSPACE_ROOT = Path(os.getenv("HEARTHFORGE_WORKSPACE", "/tmp/hearthforge"))
 
 # Orchestrator settings
 MAX_CONCURRENT_AGENTS = int(os.getenv("HEARTHFORGE_MAX_CONCURRENT", "3"))
-TASK_TIMEOUT_SECONDS = int(os.getenv("HEARTHFORGE_TASK_TIMEOUT", "300"))
+TASK_TIMEOUT_SECONDS = int(os.getenv("HEARTHFORGE_TASK_TIMEOUT", "600"))
 
 # Retry settings
 MAX_RETRIES = int(os.getenv("HEARTHFORGE_MAX_RETRIES", "3"))
