@@ -227,7 +227,11 @@ class ToolAgent:
             parts.append(
                 f"\n\n## Available Services\n"
                 f"- SearXNG web search: GET {SEARXNG_URL}/search?q=<query>&format=json&language=en\n"
-                f"  Use this when you need to search the web for current information, not just APIs."
+                f"  Use this when you need to search the web for current information.\n\n"
+                f"IMPORTANT: When using SearXNG in your script, you MUST also fetch the actual\n"
+                f"page content from the top 2-3 result URLs using requests.get(). Search snippets\n"
+                f"are too short to contain useful data. Strip HTML tags to extract readable text.\n"
+                f"Return the extracted page content in your output, not just titles and snippets."
             )
 
         # Search-native: search for current API docs before writing the script
@@ -271,14 +275,26 @@ class ToolAgent:
             parts.append(
                 f"\n\n## Available Services\n"
                 f"- SearXNG web search: GET {SEARXNG_URL}/search?q=<query>&format=json&language=en\n"
-                f"  Use this when you need to search the web for current information, not just APIs."
+                f"  Use this when you need to search the web for current information.\n\n"
+                f"IMPORTANT: When using SearXNG in your script, you MUST also fetch the actual\n"
+                f"page content from the top 2-3 result URLs using requests.get(). Search snippets\n"
+                f"are too short to contain useful data. Strip HTML tags to extract readable text.\n"
+                f"Return the extracted page content in your output, not just titles and snippets."
             )
 
-        # Always search on retries — the failure likely means stale API knowledge
+        # Search based on the ACTUAL error, not the generic task description.
+        # If we can extract the API domain from the failed script, search for
+        # that API's documentation specifically. This is far more useful than
+        # re-searching "Tokyo weather API".
         if self.search:
-            search_results = await self._search_for_api_info(task)
-            if search_results:
-                parts.append(f"\n\n{search_results}")
+            targeted_results = await self._search_for_error_fix(task, previous_script)
+            if targeted_results:
+                parts.append(f"\n\n{targeted_results}")
+            else:
+                # Fall back to generic task-based search
+                search_results = await self._search_for_api_info(task)
+                if search_results:
+                    parts.append(f"\n\n{search_results}")
 
         if dependency_outputs:
             parts.append("\n\n## Context from prior tasks:\n")
@@ -305,6 +321,57 @@ class ToolAgent:
             system_prompt=system_prompt,
             user_message=user_message,
             temperature=temperature,
+        )
+
+    async def _search_for_error_fix(
+        self,
+        task: TaskNode,
+        previous_script: str | None,
+    ) -> str:
+        """
+        On retry, search for API documentation based on the actual error,
+        not the generic task description. Extracts the API domain from the
+        failed script and searches for its docs page directly.
+        """
+        if not self.search or not previous_script:
+            return ""
+
+        from urllib.parse import urlparse
+
+        # Extract API URLs from the failed script
+        urls = re.findall(r'https?://[^\s\'"\\)},]+', previous_script)
+        # Filter out SearXNG URLs
+        api_domains = set()
+        for url in urls:
+            try:
+                parsed = urlparse(url.rstrip(".,;:"))
+                if parsed.netloc and SEARXNG_URL not in url:
+                    api_domains.add(parsed.netloc)
+            except Exception:
+                continue
+
+        if not api_domains:
+            return ""
+
+        # Search for documentation for each API domain found
+        all_results = []
+        for domain in list(api_domains)[:2]:  # Limit to 2 domains
+            query = f"{domain} API documentation parameters examples"
+            logger.info(f"  🔍 [{task.id}] Targeted retry search: {query}")
+            try:
+                results = await self.search.search(query, max_results=3)
+                if results:
+                    # Fetch actual page content from the top results
+                    await self.search._enrich_with_page_content(results)
+                    all_results.extend(results)
+            except Exception as e:
+                logger.debug(f"  🔍 [{task.id}] Targeted search failed for {domain}: {e}")
+
+        if not all_results:
+            return ""
+
+        return self.search._format_results(
+            f"API docs for {', '.join(api_domains)}", all_results
         )
 
     async def _search_for_api_info(self, task: TaskNode) -> str:
