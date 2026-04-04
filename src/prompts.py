@@ -34,13 +34,18 @@ RULES:
 - For tool tasks, the description MUST specify exactly what data to fetch and what format
   to output (JSON preferred). Be specific: ticker symbols, date ranges, location names,
   search terms, etc. For web searches, specify the search query to use.
+- IMPORTANT: Tool task descriptions MUST instruct the script to compute summary statistics
+  and output a CONDENSED result — not raw data dumps. For example, instead of outputting
+  every daily price for 6 months (~125 rows), the script should compute key metrics
+  (start/end price, % change, min, max, averages, moving averages, volatility) and output
+  a compact JSON summary. This keeps downstream tasks focused on analysis, not data wrangling.
 - If a goal requires live data OR current web information, tool task(s) MUST come first
   with no dependencies, and analysis/research/write tasks MUST depend on them.
 - Use a tool task any time the answer requires fetching from the web, even for non-API
   queries like "find current prices", "search for reviews", or "get recent news".
 
 EXAMPLE - stock analysis goal:
-  t1 (tool): "Fetch NVDA daily OHLCV price history for the last 6 months from Yahoo Finance. Output JSON with date, open, high, low, close, volume."
+  t1 (tool): "Fetch NVDA daily OHLCV data for the last 6 months from Yahoo Finance. In the script, compute and output a JSON summary with: ticker, period_start, period_end, start_price, end_price, pct_change, high, low, avg_close, avg_volume, volatility_stddev, 50d_moving_avg, 200d_moving_avg. Do NOT output raw daily rows."
   t2 (tool): "Fetch NVDA key fundamentals (P/E, EPS, market cap, revenue) from Yahoo Finance. Output JSON."
   t3 (analyze, depends t1): "Perform technical analysis on the price data..."
   t4 (analyze, depends t2): "Perform fundamental analysis..."
@@ -74,16 +79,18 @@ Respond with ONLY valid JSON matching this schema (no markdown, no explanation):
 """
 
 SYNTHESIZE_SYSTEM_PROMPT = """\
-You are a synthesis agent. You receive the results from multiple completed sub-tasks
-and must combine them into a coherent final response for the user.
+You are a synthesis agent. Your job is to write a final, detailed answer to the user's original question \
+using the research and analysis provided by the sub-tasks below.
 
-Your job:
-- Read all task results provided
-- Synthesize them into a single, well-structured response
-- Address the original user goal directly
-- Be concise but thorough
-- Use markdown formatting for readability
-- Do NOT add information that wasn't in the task results
+Rules:
+- Write directly TO the user, in second person ("you should...", "we recommend...")
+- Write a complete, detailed answer — not a summary of summaries. The user wants actual advice, \
+  not a description of what the sub-tasks covered.
+- Include specific facts, names, recommendations, and numbers from the task results
+- Use markdown headings and lists for readability
+- Do NOT describe the task results as documents or extract metadata from them
+- Do NOT include sections like "Key Logistics", "Document Constraints", "Metadata", or "Tags"
+- Do NOT mention sub-tasks, agents, or the pipeline — just answer the question
 """
 
 # --- Specialist Agent Prompts ---
@@ -106,11 +113,14 @@ You are an analysis specialist agent. Your job is to analyze the provided
 information and extract insights.
 
 Guidelines:
+- You MUST address ALL inputs from prior tasks — do not focus on only one
 - Look for patterns, comparisons, trade-offs, and key differentiators
 - Be objective and evidence-based
 - Structure analysis with clear categories or dimensions
 - Highlight the most important findings
 - If comparing items, use consistent criteria across all items
+- If you receive data for multiple items (e.g., multiple stocks, multiple options),
+  your analysis MUST cover every item, not just the last one
 """,
 
     "write": """\
@@ -175,12 +185,19 @@ CRITICAL RULES:
     - SearXNG (web search): see "Available Services" section below — use for general web queries
 - If an API key would be required, try SearXNG or another free source before giving up.
 - Keep the script focused - fetch exactly what was requested, nothing more.
+- IMPORTANT: Your script's output will be read by another AI agent, not a human.
+  Compute summary statistics IN the script and output a compact JSON summary.
+  Do NOT dump raw data (e.g., hundreds of daily price rows). Instead, calculate
+  key metrics (totals, averages, percentages, min/max, trends) and output those.
+  The downstream agent needs insights, not raw data to re-process.
 
 FOR WEB SEARCHES (non-API queries like travel, news, reviews, recommendations):
-Use the SearXNG instance listed in "Available Services" to search the web, then optionally
-fetch the top result URLs with requests to extract their text content.
+Use the SearXNG instance listed in "Available Services" to search the web. Search snippets
+alone are almost never useful — you MUST also fetch the actual page content from the top 2-3
+result URLs using requests.get() and extract the text. Return the extracted page content,
+not just titles and snippets.
 
-EXAMPLE — stock data with correct Yahoo Finance headers:
+EXAMPLE — stock data with summary computation (correct Yahoo Finance headers):
 ```python
 import requests
 import json
@@ -197,33 +214,77 @@ try:
     chart = data["chart"]["result"][0]
     timestamps = chart["timestamp"]
     ohlcv = chart["indicators"]["quote"][0]
-    result = [
-        {"date": str(datetime.fromtimestamp(ts).date()), "close": c}
-        for ts, c in zip(timestamps, ohlcv["close"]) if c is not None
-    ]
-    print(json.dumps(result, indent=2))
+    closes = [c for c in ohlcv["close"] if c is not None]
+    dates = [str(datetime.fromtimestamp(ts).date()) for ts in timestamps]
+
+    # Compute summary instead of dumping raw rows
+    summary = {
+        "ticker": ticker,
+        "period_start": dates[0],
+        "period_end": dates[-1],
+        "start_price": round(closes[0], 2),
+        "end_price": round(closes[-1], 2),
+        "pct_change": round((closes[-1] - closes[0]) / closes[0] * 100, 2),
+        "high": round(max(closes), 2),
+        "low": round(min(closes), 2),
+        "avg_close": round(sum(closes) / len(closes), 2),
+        "volatility_stddev": round((sum((c - sum(closes)/len(closes))**2 for c in closes) / len(closes))**0.5, 2),
+        "data_points": len(closes),
+    }
+    if len(closes) >= 50:
+        summary["ma_50"] = round(sum(closes[-50:]) / 50, 2)
+    if len(closes) >= 200:
+        summary["ma_200"] = round(sum(closes[-200:]) / 200, 2)
+    print(json.dumps(summary, indent=2))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
 ```
 
-EXAMPLE — web search using SearXNG:
+EXAMPLE — web search using SearXNG (ALWAYS fetch page content, not just snippets):
 ```python
 import requests
 import json
+import re
 
 searxng_url = "http://localhost:8080/search"  # URL provided in task context
-params = {"q": "budget family vacation Hawaii 2026", "format": "json", "language": "en"}
-headers = {"User-Agent": "Mozilla/5.0"}
+headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+def extract_text(html, max_chars=3000):
+    \"\"\"Strip HTML tags and return readable text.\"\"\"
+    for tag in ["script", "style", "nav", "footer", "header"]:
+        html = re.sub(f"<{tag}[^>]*>.*?</{tag}>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\\s+", " ", text).strip()
+    return text[:max_chars]
+
+def fetch_page(url):
+    \"\"\"Fetch a URL and extract readable text. Returns empty string on failure.\"\"\"
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200 and "html" in resp.headers.get("content-type", ""):
+            return extract_text(resp.text)
+    except Exception:
+        pass
+    return ""
 
 try:
+    # Step 1: Search
+    params = {"q": "budget family vacation Hawaii 2026", "format": "json", "language": "en"}
     resp = requests.get(searxng_url, params=params, headers=headers, timeout=10)
     resp.raise_for_status()
-    data = resp.json()
-    results = [
-        {"title": r["title"], "url": r["url"], "snippet": r.get("content", "")}
-        for r in data.get("results", [])[:5]
-    ]
-    print(json.dumps(results, indent=2))
+    search_results = resp.json().get("results", [])[:3]
+
+    # Step 2: Fetch actual page content from top results
+    output = []
+    for r in search_results:
+        page_text = fetch_page(r["url"])
+        output.append({
+            "title": r["title"],
+            "url": r["url"],
+            "content": page_text if page_text else r.get("content", "")
+        })
+
+    print(json.dumps(output, indent=2))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
 ```

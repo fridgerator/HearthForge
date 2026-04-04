@@ -15,7 +15,7 @@ WORKSPACE_ROOT = Path(os.getenv("HEARTHFORGE_WORKSPACE", "/tmp/hearthforge"))
 
 # Orchestrator settings
 MAX_CONCURRENT_AGENTS = int(os.getenv("HEARTHFORGE_MAX_CONCURRENT", "3"))
-TASK_TIMEOUT_SECONDS = int(os.getenv("HEARTHFORGE_TASK_TIMEOUT", "300"))
+TASK_TIMEOUT_SECONDS = int(os.getenv("HEARTHFORGE_TASK_TIMEOUT", "600"))
 
 # Retry settings
 MAX_RETRIES = int(os.getenv("HEARTHFORGE_MAX_RETRIES", "3"))
@@ -58,9 +58,13 @@ PAGE_FETCH_TIMEOUT = float(os.getenv("HEARTHFORGE_PAGE_FETCH_TIMEOUT", "5.0"))
 PAGE_FETCH_MAX_CHARS = int(os.getenv("HEARTHFORGE_PAGE_FETCH_MAX_CHARS", "8000"))
 
 # Ollama generation parameters
+# num_predict must be large enough for Qwen3's thinking tokens + actual response.
+# Qwen3 spends tokens on <think>...</think> before producing content — 4096 is
+# too small for complex tasks and results in empty responses.
 OLLAMA_OPTIONS = {
     "temperature": 0.3,       # Lower for more deterministic task planning
-    "num_predict": 4096,      # Max tokens per response
+    "num_predict": 16384,     # Max tokens per response (thinking models need headroom)
+    "stop": ["<|im_end|>", "<|endoftext|>"],  # Prevent Qwen3 runaway generation
 }
 
 # Agent-specific temperature overrides (creative tasks get higher temp)

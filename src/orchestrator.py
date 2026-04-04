@@ -19,7 +19,7 @@ import time
 from datetime import datetime
 
 from agent import SubAgent
-from config import MEMORY_PROMPT_BUDGET
+from config import MAX_RETRIES, MEMORY_PROMPT_BUDGET
 from dag import DAGExecutor
 from memory import MemoryManager
 from models import AgentType, OrchestratorResult, TaskDAG, TaskNode, TaskStatus
@@ -200,16 +200,28 @@ class Orchestrator:
             )
 
         user_message = (
+            f"/no_think\n"  # Disable Qwen3 thinking mode — synthesis is writing, not reasoning
             f"Original goal: {goal}\n\n"
             f"Below are the results from {len(results)} completed sub-tasks. "
             f"Synthesize them into a single coherent response that addresses the original goal.\n\n"
             f"{context}"
         )
 
-        return await self.client.chat(
-            system_prompt=synthesis_prompt,
-            user_message=user_message,
-        )
+        logger.debug(f"Synthesis prompt size: {len(user_message)} chars")
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            if attempt > 1:
+                logger.info(f"  ↻ Synthesis retry {attempt}/{MAX_RETRIES}...")
+            result = await self.client.chat(
+                system_prompt=synthesis_prompt,
+                user_message=user_message,
+            )
+            if result and result.strip():
+                return result
+            logger.warning(f"  ⚠ Synthesis attempt {attempt}: empty response (context={len(user_message)} chars)")
+
+        logger.error("  ✗ Synthesis failed after all retries — returning partial results")
+        return "\n\n".join(context_parts)
 
     def _record_to_memory(self, result: OrchestratorResult, workspace_id: str) -> None:
         """Record a completed run to the user's history."""

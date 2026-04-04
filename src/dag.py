@@ -80,12 +80,17 @@ class DAGExecutor:
         self._running_tasks.add(task.id)
 
         async with self.semaphore:
-            # Gather outputs from dependency tasks
+            # Gather outputs from dependency tasks, keyed by task name
+            # so the downstream agent knows what each result represents
+            # (e.g., "Fetch NVDA price data" instead of "t1")
             dep_outputs = {}
+            task_lookup = {t.id: t for t in self.dag.tasks}
             for dep_id in task.depends_on:
                 output = self.workspace.read_task_output(dep_id)
                 if output:
-                    dep_outputs[dep_id] = output
+                    dep_task = task_lookup.get(dep_id)
+                    label = dep_task.name if dep_task else dep_id
+                    dep_outputs[label] = output
 
             # Write the input context to workspace (for debugging)
             self.workspace.write_task_input(task, dep_outputs)

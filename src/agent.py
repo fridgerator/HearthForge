@@ -21,6 +21,12 @@ from pathlib import Path
 
 from config import AGENT_TEMPERATURES, MAX_RETRIES
 from models import AgentType, TaskNode, TaskStatus
+
+# Agent types where Qwen3 thinking mode wastes tokens without benefit.
+# Write tasks just reformat existing content into polished prose — they
+# don't need chain-of-thought. Analyze and summarize are excluded because
+# they need reasoning to properly ground their output in the input context.
+NO_THINK_AGENTS = {AgentType.WRITE}
 from ollama_client import OllamaClient
 from prompts import get_agent_prompt
 from tool_agent import ToolAgent
@@ -137,12 +143,13 @@ class SubAgent:
         Build the user message that the sub-agent receives.
         Includes the task description and any upstream results.
         """
-        parts = [f"## Task: {task.name}\n\n{task.description}"]
+        prefix = "/no_think\n" if task.agent_type in NO_THINK_AGENTS else ""
+        parts = [f"{prefix}## Task: {task.name}\n\n{task.description}"]
 
         if dependency_outputs:
             parts.append("\n\n## Context from prior tasks:\n")
-            for dep_id, output in dependency_outputs.items():
-                parts.append(f"### Results from task [{dep_id}]:\n{output}\n")
+            for dep_name, output in dependency_outputs.items():
+                parts.append(f"### Results from task [{dep_name}]:\n{output}\n")
 
         return "\n".join(parts)
 
