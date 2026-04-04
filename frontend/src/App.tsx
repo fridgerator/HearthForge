@@ -3,9 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
-import NewTaskPage from './pages/NewTaskPage'
-import JobsPage from './pages/JobsPage'
-import WorkspacesPage from './pages/WorkspacesPage'
+import ChatPage from './pages/ChatPage'
 import MemoryPage from './pages/MemoryPage'
 import PreferencesPage from './pages/PreferencesPage'
 
@@ -37,17 +35,13 @@ function AppRoutes() {
   return (
     <Routes>
       <Route element={<Layout />}>
-        <Route index element={<Navigate to="/tasks" replace />} />
-        <Route path="/tasks" element={<NewTaskPage />} />
-        <Route path="/jobs" element={<JobsPage />} />
-        <Route path="/jobs/:jobId" element={<JobsPage />} />
-        <Route path="/workspaces" element={<WorkspacesPage />} />
-        <Route path="/workspaces/:runId" element={<WorkspacesPage />} />
+        <Route index element={<ChatPage />} />
+        <Route path="/chat/:jobId" element={<ChatPage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/preferences" element={<PreferencesPage />} />
-        <Route path="*" element={<Navigate to="/tasks" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
-      <Route path="/login" element={<Navigate to="/tasks" replace />} />
+      <Route path="/login" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }

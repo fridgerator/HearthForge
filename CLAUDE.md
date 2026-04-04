@@ -22,7 +22,12 @@ User Goal → Orchestrator (brain) → Task DAG → Sub-Agents → Workspace (fi
 - **Database** (`src/database.py`): SQLite storage layer at `~/.hearthforge/hearthforge.db`. Handles users, memory (history/preferences/tool knowledge), and job persistence. WAL mode for concurrent safety. Short-lived connections per operation.
 - **Memory** (`src/memory.py`): Per-user memory backed by SQLite. Three sections: rolling history (last N runs), persistent preferences, persistent tool knowledge. Loads into in-memory cache for prompt rendering. Injected into orchestrator/tool prompts.
 - **Server** (`src/server.py`): FastAPI with async job execution, JWT auth, REST API for jobs/memory/preferences/workspaces. Jobs persist to SQLite (survive server restarts). Serves the built React frontend from `frontend/dist/` with SPA fallback.
-- **Frontend** (`frontend/`): React + Vite + TypeScript SPA. Auth state via React Context, server data via TanStack Query (React Query v5). React Router v6 for client-side navigation. Proxies `/api` to the FastAPI server in dev mode (`npm run dev`).
+- **Frontend** (`frontend/`): React + Vite + TypeScript SPA. Chat-first UI — input pinned at bottom, scrolling message log above, collapsible task execution details per response. Auth state via React Context, server data via TanStack Query (React Query v5). React Router v6 for client-side navigation. Proxies `/api` to the FastAPI server in dev mode (`npm run dev`).
+  - `ChatPage.tsx` — primary view: message list + polling, loads past jobs from route (`/chat/:jobId`)
+  - `ChatMessage.tsx` — user bubble (right) / assistant bubble (left) with loading/error/completed states
+  - `ChatInput.tsx` — auto-resizing textarea, Enter to send, disabled while job is running
+  - `TaskDetails.tsx` — collapsible block inside each assistant message; fetches workspace data lazily on expand
+  - `Layout.tsx` — sidebar with "New Chat" button and recent job history list
 
 **Filesystem IPC pattern:** Agents communicate via workspace directories (`/tmp/hearthforge/{run_id}/tasks/{task_id}/`). Each task writes output.txt, status.json, and optionally script files and attempt logs. This stays as filesystem (not SQLite) — write-once semantics with no concurrency conflicts, and the file layout is a debugging feature.
 
@@ -75,10 +80,16 @@ npm run build    # builds to frontend/dist/ (served by FastAPI in production)
 - WebSocket or SSE for live job progress instead of polling
 - Docker/E2B sandboxing for tool script execution (security)
 
+**Chat V2 — conversational context (next UI priority):**
+- Add `conversations` table to SQLite; `conversation_id` required on all jobs
+- New API endpoints: `POST /api/conversations`, `GET /api/conversations`, `GET /api/conversations/:id`
+- `Orchestrator.run()` accepts optional `conversation_id`; injects last 3 prior goals + 150-char summaries into decomposition and synthesis prompts
+- Frontend: sidebar groups jobs by conversation; `POST /api/jobs` sends `conversation_id`
+- Approach: inject history as text (not multi-turn LLM message arrays) — simpler, works within existing memory budget system
+
 **Web UI enhancements:**
 - Scheduled tasks page (create, manage, view history)
 - Real-time task progress (show which sub-agent is running, not just "running...")
-- Markdown rendering for final output
 - Mobile responsive improvements
 
 ## Key Design Decisions
@@ -88,3 +99,5 @@ npm run build    # builds to frontend/dist/ (served by FastAPI in production)
 - **SQLite for persistent state, filesystem for workspace IPC**: Memory, auth, and jobs use SQLite (ACID, concurrent-safe). Workspace task outputs stay as files — write-once with no concurrency conflicts, and the directory layout is useful for debugging. Trade-off is workspaces won't scale to thousands of concurrent runs, but that's fine for a home lab.
 - **Per-user everything**: Memory, preferences, tool knowledge, and jobs are all scoped to a user_id. Multi-user from day one.
 - **Graceful degradation**: If SearXNG is down, tool agent falls back to training knowledge. If a tool script fails, retries with error context. If all retries fail, downstream tasks get skipped and the synthesis works with whatever succeeded.
+- **Chat-first UI, jobs as messages**: Each submitted goal is a job; the frontend presents jobs as a chat conversation. User messages appear right-aligned, assistant responses left-aligned. Task execution details (DAG, per-agent output, errors) are collapsed inside each assistant message and fetched lazily. Sidebar shows recent job history — clicking any entry loads it into the chat view at `/chat/:jobId`.
+- **`run_id` on OrchestratorResult**: The workspace `run_id` is returned on every completed job so the frontend can fetch task-level details without a separate lookup.

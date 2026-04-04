@@ -90,6 +90,7 @@ class Orchestrator:
             completed_tasks=completed,
             failed_tasks=failed,
             elapsed_seconds=elapsed,
+            run_id=workspace.run_id,
         )
 
         # Step 5: Record to memory and learn from tool outcomes

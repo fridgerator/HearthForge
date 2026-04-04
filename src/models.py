@@ -103,3 +103,4 @@ class OrchestratorResult(BaseModel):
     completed_tasks: int
     failed_tasks: int
     elapsed_seconds: float
+    run_id: str | None = None

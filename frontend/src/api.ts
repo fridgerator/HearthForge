@@ -26,6 +26,7 @@ export interface OrchestratorResult {
   completed_tasks: number
   total_tasks: number
   elapsed_seconds: number
+  run_id: string | null
 }
 
 export interface JobDetail extends JobListItem {
