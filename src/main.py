@@ -14,6 +14,7 @@ import asyncio
 import logging
 import sys
 
+import database as db
 from config import OLLAMA_HOST, OLLAMA_MODEL
 from memory import MemoryManager
 from ollama_client import OllamaClient
@@ -96,7 +97,6 @@ def show_memory(user_id: str) -> None:
     mem = memory.load()
 
     print(f"\n📝 Memory for user '{user_id}':")
-    print(f"   File: {memory.file_path}")
 
     print(f"\n   History ({len(mem.history)} entries):")
     if mem.history:
@@ -155,6 +155,7 @@ def main():
     args = parser.parse_args()
 
     setup_logging(args.verbose)
+    db.init_db()
 
     if args.show_memory:
         show_memory(args.user)

@@ -34,8 +34,10 @@ MEMORY_PROMPT_BUDGET = int(os.getenv("HEARTHFORGE_MEMORY_BUDGET", "4000"))
 SERVER_HOST = os.getenv("HEARTHFORGE_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("HEARTHFORGE_PORT", "8742"))
 
-# Auth settings
-# User credentials stored here. Created on first run or via CLI.
+# Database
+DATABASE_PATH = Path(os.getenv("HEARTHFORGE_DB", str(Path.home() / ".hearthforge" / "hearthforge.db")))
+
+# Auth settings (legacy JSON paths kept for migration only)
 AUTH_DB_PATH = Path(os.getenv("HEARTHFORGE_AUTH_DB", str(Path.home() / ".hearthforge" / "users.json")))
 # JWT secret for session tokens. CHANGE THIS in production.
 JWT_SECRET = os.getenv("HEARTHFORGE_JWT_SECRET", "hearthforge-dev-secret-change-me")

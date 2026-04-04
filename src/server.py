@@ -35,8 +35,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import database as db
 from auth import AuthManager
 from config import (
+    AUTH_DB_PATH,
+    MEMORY_DIR,
     OLLAMA_HOST,
     OLLAMA_MODEL,
     SERVER_HOST,
@@ -103,21 +106,8 @@ class WorkspaceListItem(BaseModel):
 
 # --- Job Tracking ---
 
-class Job:
-    """In-memory job tracker for async orchestrator runs."""
-    def __init__(self, job_id: str, goal: str, user_id: str):
-        self.job_id = job_id
-        self.goal = goal
-        self.user_id = user_id
-        self.status = "pending"
-        self.created_at = datetime.now().isoformat()
-        self.completed_at: str | None = None
-        self.result: OrchestratorResult | None = None
-        self.error: str | None = None
-        self.task: asyncio.Task | None = None
-
-# Global job registry: job_id -> Job
-_jobs: dict[str, Job] = {}
+# In-flight asyncio tasks for running jobs (not persisted — just for cancellation on shutdown)
+_running_tasks: dict[str, asyncio.Task] = {}
 
 
 # --- App Lifecycle ---
@@ -129,7 +119,27 @@ async def lifespan(app: FastAPI):
     logger.info(f"Ollama: {OLLAMA_MODEL} @ {OLLAMA_HOST}")
     logger.info(f"Workspace: {WORKSPACE_ROOT}")
 
-    # Ensure first user exists
+    # Initialize SQLite database
+    db.init_db()
+
+    # One-time migration: import any existing JSON data into SQLite
+    if AUTH_DB_PATH.exists() or MEMORY_DIR.exists():
+        counts = db.migrate_from_json(MEMORY_DIR, AUTH_DB_PATH)
+        if any(counts.values()):
+            logger.info(f"Migrated JSON data to SQLite: {counts}")
+
+    # Mark any jobs that were "running" when server last stopped as failed
+    # (they won't resume — the asyncio tasks are gone)
+    conn = db._get_conn()
+    try:
+        conn.execute(
+            "UPDATE jobs SET status = 'failed', error = 'Server restarted' "
+            "WHERE status IN ('pending', 'running')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
     auth = AuthManager()
     if not auth.has_users():
         logger.warning("No users found. Create one with POST /api/auth/setup")
@@ -137,9 +147,9 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown: cancel any running jobs
-    for job in _jobs.values():
-        if job.task and not job.task.done():
-            job.task.cancel()
+    for task in _running_tasks.values():
+        if not task.done():
+            task.cancel()
     logger.info("Server shutting down")
 
 
@@ -287,17 +297,18 @@ async def submit_goal(
     job_id = str(uuid.uuid4())[:12]
     user_id = user["sub"]
 
-    job = Job(job_id=job_id, goal=req.goal, user_id=user_id)
-    _jobs[job_id] = job
+    db.create_job(job_id=job_id, user_id=user_id, goal=req.goal)
 
     # Launch the orchestrator as a background task
-    job.task = asyncio.create_task(_run_job(job))
+    task = asyncio.create_task(_run_job(job_id, user_id, req.goal))
+    _running_tasks[job_id] = task
 
+    job_row = db.get_job(job_id)
     return JobStatusResponse(
-        job_id=job.job_id,
-        status=job.status,
-        goal=job.goal,
-        created_at=job.created_at,
+        job_id=job_id,
+        status=job_row["status"],
+        goal=job_row["goal"],
+        created_at=job_row["created_at"],
     )
 
 
@@ -307,22 +318,28 @@ async def get_job_status(
     user: Annotated[dict, Depends(get_current_user)],
 ):
     """Get the status and result of a job."""
-    job = _jobs.get(job_id)
-    if not job:
+    job_row = db.get_job(job_id)
+    if not job_row:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Users can only see their own jobs
-    if job.user_id != user["sub"]:
+    if job_row["user_id"] != user["sub"]:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    result = None
+    if job_row["result_json"]:
+        try:
+            result = OrchestratorResult(**json.loads(job_row["result_json"]))
+        except Exception:
+            pass
 
     return JobStatusResponse(
-        job_id=job.job_id,
-        status=job.status,
-        goal=job.goal,
-        created_at=job.created_at,
-        completed_at=job.completed_at,
-        result=job.result,
-        error=job.error,
+        job_id=job_row["job_id"],
+        status=job_row["status"],
+        goal=job_row["goal"],
+        created_at=job_row["created_at"],
+        completed_at=job_row["completed_at"],
+        result=result,
+        error=job_row["error"],
     )
 
 
@@ -331,38 +348,44 @@ async def list_jobs(
     user: Annotated[dict, Depends(get_current_user)],
 ):
     """List all jobs for the current user (most recent first)."""
-    user_id = user["sub"]
-    user_jobs = [
+    rows = db.get_jobs_for_user(user["sub"])
+    return [
         JobListItem(
-            job_id=j.job_id,
-            status=j.status,
-            goal=j.goal,
-            created_at=j.created_at,
-            completed_at=j.completed_at,
+            job_id=r["job_id"],
+            status=r["status"],
+            goal=r["goal"],
+            created_at=r["created_at"],
+            completed_at=r["completed_at"],
         )
-        for j in _jobs.values()
-        if j.user_id == user_id
+        for r in rows
     ]
-    return sorted(user_jobs, key=lambda j: j.created_at, reverse=True)
 
 
-async def _run_job(job: Job) -> None:
+async def _run_job(job_id: str, user_id: str, goal: str) -> None:
     """Background task that runs the orchestrator for a job."""
-    job.status = "running"
+    db.update_job(job_id, status="running")
     client = OllamaClient()
 
     try:
-        orchestrator = Orchestrator(client, user_id=job.user_id)
-        result = await orchestrator.run(job.goal)
-        job.result = result
-        job.status = "completed"
+        orchestrator = Orchestrator(client, user_id=user_id)
+        result = await orchestrator.run(goal)
+        db.update_job(
+            job_id,
+            status="completed",
+            completed_at=datetime.now().isoformat(),
+            result_json=result.model_dump_json(),
+        )
     except Exception as e:
-        job.status = "failed"
-        job.error = str(e)
-        logger.error(f"Job {job.job_id} failed: {e}")
+        db.update_job(
+            job_id,
+            status="failed",
+            completed_at=datetime.now().isoformat(),
+            error=str(e),
+        )
+        logger.error(f"Job {job_id} failed: {e}")
     finally:
-        job.completed_at = datetime.now().isoformat()
         await client.close()
+        _running_tasks.pop(job_id, None)
 
 
 # --- Memory/Preferences Endpoints ---
@@ -419,13 +442,9 @@ async def delete_tool_knowledge(
 ):
     """Delete all tool knowledge entries for a given source."""
     user_id = user["sub"]
-    memory = MemoryManager(user_id=user_id)
-    mem = memory.load()
-    before = len(mem.tool_knowledge)
-    mem.tool_knowledge = [t for t in mem.tool_knowledge if t.source != source]
-    if len(mem.tool_knowledge) < before:
-        memory.save()
-        return {"status": "ok", "removed_source": source, "removed_count": before - len(mem.tool_knowledge)}
+    removed = db.remove_tool_knowledge_by_source(user_id, source)
+    if removed > 0:
+        return {"status": "ok", "removed_source": source, "removed_count": removed}
     raise HTTPException(status_code=404, detail=f"No tool knowledge for source '{source}'")
 
 
@@ -536,8 +555,7 @@ async def health():
         "status": "ok",
         "model": OLLAMA_MODEL,
         "ollama_host": OLLAMA_HOST,
-        "active_jobs": sum(1 for j in _jobs.values() if j.status == "running"),
-        "total_jobs": len(_jobs),
+        "active_jobs": len(_running_tasks),
     }
 
 

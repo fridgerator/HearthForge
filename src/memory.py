@@ -18,11 +18,7 @@ PERSISTENT (never expires, grows over time):
     the same mistakes.
 
 Storage:
-  ~/.hearthforge/memory/{user_id}.json
-
-  Each user gets their own file. The "default" user is used for CLI mode.
-  When the web interface is added, each authenticated user gets a user_id
-  and their own memory file.
+  SQLite database at ~/.hearthforge/hearthforge.db
 
 Context window budget:
   Memory is injected into system prompts, so it consumes tokens. The module
@@ -30,68 +26,57 @@ Context window budget:
   respects a configurable character limit to avoid blowing the context.
 """
 
-import json
 import logging
 from datetime import datetime
-from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from config import MEMORY_DIR, MEMORY_MAX_HISTORY
+import database as db
+from config import MEMORY_MAX_HISTORY
 
 logger = logging.getLogger(__name__)
 
 
-# --- Data Models ---
+# --- Data Models (kept for type safety and prompt rendering) ---
 
 class RunSummary(BaseModel):
     """Compact summary of a single orchestrator run for history."""
     timestamp: str
     goal: str
-    outcome: str                    # "success", "partial", "failed"
-    summary: str                    # Brief summary of what was produced
+    outcome: str
+    summary: str
     task_count: int
     completed_count: int
     failed_count: int
     elapsed_seconds: float
-    workspace_id: str | None = None  # Reference to workspace for full details
+    workspace_id: str | None = None
 
 class ToolKnowledgeEntry(BaseModel):
     """A learned fact about an external API or data source."""
-    source: str                     # e.g. "coingecko", "yahoo_finance"
-    fact: str                       # e.g. "OHLCV endpoint deprecated, use /market_chart/range"
+    source: str
+    fact: str
     learned_at: str
-    confidence: str = "confirmed"   # "confirmed" or "suspected"
+    confidence: str = "confirmed"
 
 class UserPreference(BaseModel):
     """A user preference, either explicit or inferred."""
-    key: str                        # e.g. "stock_analysis_indicators"
-    value: str                      # e.g. "Always include RSI, MACD, support/resistance"
-    source: str = "explicit"        # "explicit" (user told us) or "inferred" (observed)
+    key: str
+    value: str
+    source: str = "explicit"
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-
-class UserMemory(BaseModel):
-    """Complete memory state for a single user."""
-    user_id: str
-    history: list[RunSummary] = Field(default_factory=list)
-    preferences: list[UserPreference] = Field(default_factory=list)
-    tool_knowledge: list[ToolKnowledgeEntry] = Field(default_factory=list)
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
 # --- Memory Manager ---
 
 class MemoryManager:
     """
-    Manages per-user memory files.
+    Manages per-user memory backed by SQLite.
 
     Usage:
         memory = MemoryManager(user_id="myuser")
-        mem = memory.load()
+        memory.load()  # loads from DB into in-memory state for prompt rendering
         memory.add_run(result)
         memory.add_tool_knowledge("coingecko", "Use /market_chart/range not /ohlcv/history")
-        memory.save()
 
         # Inject into prompts
         context = memory.render_for_prompt(max_chars=3000)
@@ -99,46 +84,75 @@ class MemoryManager:
 
     def __init__(self, user_id: str = "default"):
         self.user_id = user_id
-        self.memory_dir = MEMORY_DIR
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
-        self._state: UserMemory | None = None
+        # In-memory cache for prompt rendering (loaded from DB)
+        self._history: list[RunSummary] = []
+        self._preferences: list[UserPreference] = []
+        self._tool_knowledge: list[ToolKnowledgeEntry] = []
+        self._loaded = False
 
-    @property
-    def file_path(self) -> Path:
-        return self.memory_dir / f"{self.user_id}.json"
+    def load(self):
+        """Load memory from SQLite into in-memory state for prompt rendering."""
+        # History (newest first from DB, reverse to oldest-first for internal use)
+        rows = db.get_history(self.user_id, limit=MEMORY_MAX_HISTORY)
+        self._history = [
+            RunSummary(
+                timestamp=r["timestamp"], goal=r["goal"], outcome=r["outcome"],
+                summary=r["summary"], task_count=r["task_count"],
+                completed_count=r["completed_count"], failed_count=r["failed_count"],
+                elapsed_seconds=r["elapsed_seconds"], workspace_id=r.get("workspace_id"),
+            )
+            for r in reversed(rows)  # oldest first internally
+        ]
 
-    def load(self) -> UserMemory:
-        """Load memory from disk, or create empty state if no file exists."""
-        if self.file_path.exists():
-            try:
-                data = json.loads(self.file_path.read_text())
-                self._state = UserMemory(**data)
-                logger.debug(f"Loaded memory for user '{self.user_id}': "
-                             f"{len(self._state.history)} history, "
-                             f"{len(self._state.preferences)} prefs, "
-                             f"{len(self._state.tool_knowledge)} tool facts")
-            except (json.JSONDecodeError, Exception) as e:
-                logger.warning(f"Failed to load memory for '{self.user_id}', starting fresh: {e}")
-                self._state = UserMemory(user_id=self.user_id)
-        else:
-            self._state = UserMemory(user_id=self.user_id)
-            logger.debug(f"No memory file for user '{self.user_id}', starting fresh")
+        # Preferences
+        rows = db.get_preferences(self.user_id)
+        self._preferences = [
+            UserPreference(key=r["key"], value=r["value"], source=r["source"],
+                           created_at=r["created_at"])
+            for r in rows
+        ]
 
-        return self._state
+        # Tool knowledge
+        rows = db.get_tool_knowledge(self.user_id)
+        self._tool_knowledge = [
+            ToolKnowledgeEntry(source=r["source"], fact=r["fact"],
+                               learned_at=r["learned_at"], confidence=r["confidence"])
+            for r in rows
+        ]
 
-    def save(self) -> None:
-        """Persist memory to disk."""
-        if not self._state:
-            return
-        self._state.updated_at = datetime.now().isoformat()
-        self.file_path.write_text(self._state.model_dump_json(indent=2))
-        logger.debug(f"Saved memory for user '{self.user_id}'")
+        self._loaded = True
+        logger.debug(f"Loaded memory for user '{self.user_id}': "
+                     f"{len(self._history)} history, "
+                     f"{len(self._preferences)} prefs, "
+                     f"{len(self._tool_knowledge)} tool facts")
+        return self
 
-    @property
-    def state(self) -> UserMemory:
-        if not self._state:
+    def _ensure_loaded(self):
+        if not self._loaded:
             self.load()
-        return self._state
+
+    # --- Properties for backward compat with orchestrator/server ---
+
+    @property
+    def history(self) -> list[RunSummary]:
+        self._ensure_loaded()
+        return self._history
+
+    @property
+    def preferences(self) -> list[UserPreference]:
+        self._ensure_loaded()
+        return self._preferences
+
+    @property
+    def tool_knowledge(self) -> list[ToolKnowledgeEntry]:
+        self._ensure_loaded()
+        return self._tool_knowledge
+
+    # Compat: orchestrator accesses memory.state.preferences, memory.state.history etc.
+    @property
+    def state(self):
+        self._ensure_loaded()
+        return self
 
     # --- History (rolling) ---
 
@@ -152,11 +166,7 @@ class MemoryManager:
         elapsed_seconds: float,
         workspace_id: str | None = None,
     ) -> None:
-        """
-        Record a completed run in history.
-        Automatically trims to MEMORY_MAX_HISTORY entries.
-        """
-        # Determine outcome
+        """Record a completed run in history."""
         if failed_tasks == 0:
             outcome = "success"
         elif completed_tasks > 0:
@@ -164,36 +174,33 @@ class MemoryManager:
         else:
             outcome = "failed"
 
-        # Create a brief summary (first 300 chars of output, truncated at sentence)
         summary = self._make_summary(final_output)
+        timestamp = datetime.now().isoformat()
 
-        entry = RunSummary(
-            timestamp=datetime.now().isoformat(),
-            goal=goal,
-            outcome=outcome,
-            summary=summary,
-            task_count=total_tasks,
-            completed_count=completed_tasks,
-            failed_count=failed_tasks,
-            elapsed_seconds=elapsed_seconds,
-            workspace_id=workspace_id,
+        db.add_history(
+            self.user_id,
+            timestamp=timestamp, goal=goal, outcome=outcome, summary=summary,
+            task_count=total_tasks, completed_count=completed_tasks,
+            failed_count=failed_tasks, elapsed_seconds=elapsed_seconds,
+            workspace_id=workspace_id, max_entries=MEMORY_MAX_HISTORY,
         )
 
-        self.state.history.append(entry)
+        # Update in-memory cache
+        self._history.append(RunSummary(
+            timestamp=timestamp, goal=goal, outcome=outcome, summary=summary,
+            task_count=total_tasks, completed_count=completed_tasks,
+            failed_count=failed_tasks, elapsed_seconds=elapsed_seconds,
+            workspace_id=workspace_id,
+        ))
+        if len(self._history) > MEMORY_MAX_HISTORY:
+            self._history = self._history[-MEMORY_MAX_HISTORY:]
 
-        # Trim oldest entries if over limit
-        if len(self.state.history) > MEMORY_MAX_HISTORY:
-            trimmed = len(self.state.history) - MEMORY_MAX_HISTORY
-            self.state.history = self.state.history[-MEMORY_MAX_HISTORY:]
-            logger.debug(f"Trimmed {trimmed} old history entries")
-
-        self.save()
+        logger.debug(f"Recorded run to memory for user '{self.user_id}'")
 
     def _make_summary(self, output: str, max_len: int = 300) -> str:
         """Create a brief summary from the full output."""
         if len(output) <= max_len:
             return output.strip()
-        # Try to cut at a sentence boundary
         truncated = output[:max_len]
         last_period = truncated.rfind(".")
         if last_period > max_len // 2:
@@ -203,31 +210,22 @@ class MemoryManager:
     # --- Preferences (persistent) ---
 
     def set_preference(self, key: str, value: str, source: str = "explicit") -> None:
-        """Set or update a user preference. Overwrites if key already exists."""
-        # Remove existing with same key
-        self.state.preferences = [p for p in self.state.preferences if p.key != key]
-        self.state.preferences.append(UserPreference(
-            key=key,
-            value=value,
-            source=source,
-        ))
-        self.save()
+        """Set or update a user preference."""
+        db.set_preference(self.user_id, key, value, source)
+        # Update in-memory cache
+        self._preferences = [p for p in self._preferences if p.key != key]
+        self._preferences.append(UserPreference(key=key, value=value, source=source))
         logger.info(f"Set preference '{key}' for user '{self.user_id}'")
 
     def get_preference(self, key: str) -> str | None:
         """Get a preference value by key."""
-        for pref in self.state.preferences:
-            if pref.key == key:
-                return pref.value
-        return None
+        return db.get_preference(self.user_id, key)
 
     def remove_preference(self, key: str) -> bool:
         """Remove a preference. Returns True if it existed."""
-        before = len(self.state.preferences)
-        self.state.preferences = [p for p in self.state.preferences if p.key != key]
-        removed = len(self.state.preferences) < before
+        removed = db.remove_preference(self.user_id, key)
         if removed:
-            self.save()
+            self._preferences = [p for p in self._preferences if p.key != key]
         return removed
 
     # --- Tool Knowledge (persistent) ---
@@ -238,24 +236,16 @@ class MemoryManager:
         fact: str,
         confidence: str = "confirmed",
     ) -> None:
-        """
-        Record a learned fact about an external data source.
-        Deduplicates by source+fact combination.
-        """
-        # Check for duplicate
-        for existing in self.state.tool_knowledge:
-            if existing.source == source and existing.fact == fact:
-                logger.debug(f"Tool knowledge already recorded: {source} - {fact[:50]}")
-                return
-
-        self.state.tool_knowledge.append(ToolKnowledgeEntry(
-            source=source,
-            fact=fact,
-            learned_at=datetime.now().isoformat(),
-            confidence=confidence,
-        ))
-        self.save()
-        logger.info(f"Added tool knowledge: {source} - {fact[:80]}")
+        """Record a learned fact about an external data source."""
+        added = db.add_tool_knowledge(self.user_id, source, fact, confidence)
+        if added:
+            self._tool_knowledge.append(ToolKnowledgeEntry(
+                source=source, fact=fact,
+                learned_at=datetime.now().isoformat(), confidence=confidence,
+            ))
+            logger.info(f"Added tool knowledge: {source} - {fact[:80]}")
+        else:
+            logger.debug(f"Tool knowledge already recorded: {source} - {fact[:50]}")
 
     # --- Prompt Rendering ---
 
@@ -270,13 +260,14 @@ class MemoryManager:
           2. Preferences (shapes task planning)
           3. Recent history (provides context for references to past work)
         """
+        self._ensure_loaded()
         sections = []
         budget_remaining = max_chars
 
         # Section 1: Tool Knowledge
-        if self.state.tool_knowledge:
+        if self._tool_knowledge:
             lines = ["## Known API/Tool Facts"]
-            for tk in self.state.tool_knowledge:
+            for tk in self._tool_knowledge:
                 line = f"- [{tk.source}] {tk.fact}"
                 lines.append(line)
             section = "\n".join(lines)
@@ -285,9 +276,9 @@ class MemoryManager:
                 budget_remaining -= len(section)
 
         # Section 2: Preferences
-        if self.state.preferences:
+        if self._preferences:
             lines = ["## User Preferences"]
-            for pref in self.state.preferences:
+            for pref in self._preferences:
                 line = f"- {pref.key}: {pref.value}"
                 lines.append(line)
             section = "\n".join(lines)
@@ -296,9 +287,9 @@ class MemoryManager:
                 budget_remaining -= len(section)
 
         # Section 3: Recent History (newest first, fit as many as budget allows)
-        if self.state.history:
+        if self._history:
             lines = ["## Recent Task History (newest first)"]
-            for run in reversed(self.state.history):
+            for run in reversed(self._history):
                 line = (
                     f"- [{run.timestamp[:16]}] \"{run.goal}\" → {run.outcome} "
                     f"({run.completed_count}/{run.task_count} tasks, {run.elapsed_seconds:.0f}s)"
@@ -308,7 +299,7 @@ class MemoryManager:
                     lines.append(line)
                 else:
                     break
-            if len(lines) > 1:  # More than just the header
+            if len(lines) > 1:
                 section = "\n".join(lines)
                 sections.append(section)
 
@@ -320,17 +311,22 @@ class MemoryManager:
     def render_tool_knowledge_for_agent(self) -> str:
         """
         Render just the tool knowledge section for injection into
-        the tool agent's system prompt. Kept separate since tool agents
-        need this but don't need full history/preferences.
+        the tool agent's system prompt.
         """
-        if not self.state.tool_knowledge:
+        self._ensure_loaded()
+        if not self._tool_knowledge:
             return ""
 
         lines = [
             "## KNOWN ISSUES WITH EXTERNAL APIS (from previous runs):",
             "Use this information to avoid repeating known failures:",
         ]
-        for tk in self.state.tool_knowledge:
+        for tk in self._tool_knowledge:
             lines.append(f"- [{tk.source}] {tk.fact}")
 
         return "\n".join(lines)
+
+    # --- Compat: save() is now a no-op (writes go directly to SQLite) ---
+
+    def save(self) -> None:
+        pass

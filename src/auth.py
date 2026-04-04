@@ -1,7 +1,7 @@
 """
 Simple user authentication for the web server.
 
-Storage: ~/.hearthforge/users.json
+Storage: SQLite (~/.hearthforge/hearthforge.db)
 Passwords: bcrypt hashed
 Sessions: JWT tokens (stateless, no server-side session store)
 
@@ -9,59 +9,39 @@ This is deliberately simple for a home lab setup.
 For production you'd swap this for a real auth provider.
 """
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import bcrypt
 import jwt
 
-from config import AUTH_DB_PATH, JWT_SECRET, JWT_EXPIRY_HOURS
+import database as db
+from config import JWT_SECRET, JWT_EXPIRY_HOURS
 
 logger = logging.getLogger(__name__)
 
 
 class AuthManager:
     def __init__(self):
-        self.db_path = AUTH_DB_PATH
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._users: dict[str, dict] = {}
-        self._load()
-
-    def _load(self) -> None:
-        if self.db_path.exists():
-            try:
-                self._users = json.loads(self.db_path.read_text())
-            except (json.JSONDecodeError, Exception) as e:
-                logger.warning(f"Failed to load user DB, starting fresh: {e}")
-                self._users = {}
-        else:
-            self._users = {}
-
-    def _save(self) -> None:
-        self.db_path.write_text(json.dumps(self._users, indent=2))
+        pass  # No file loading needed — SQLite handles storage
 
     def create_user(self, username: str, password: str, display_name: str | None = None) -> bool:
         """
         Create a new user. Returns False if username already exists.
         """
-        if username in self._users:
-            return False
-
         hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
-        self._users[username] = {
-            "password_hash": hashed.decode("utf-8"),
-            "display_name": display_name or username,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._save()
-        logger.info(f"Created user: {username}")
-        return True
+        created = db.create_user(
+            username=username,
+            password_hash=hashed.decode("utf-8"),
+            display_name=display_name or username,
+        )
+        if created:
+            logger.info(f"Created user: {username}")
+        return created
 
     def verify_password(self, username: str, password: str) -> bool:
         """Check if username/password combination is valid."""
-        user = self._users.get(username)
+        user = db.get_user(username)
         if not user:
             return False
         return bcrypt.checkpw(
@@ -71,9 +51,10 @@ class AuthManager:
 
     def create_token(self, username: str) -> str:
         """Create a JWT token for an authenticated user."""
+        user = db.get_user(username)
         payload = {
             "sub": username,
-            "display_name": self._users[username].get("display_name", username),
+            "display_name": user["display_name"] if user else username,
             "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
             "iat": datetime.now(timezone.utc),
         }
@@ -86,7 +67,7 @@ class AuthManager:
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
             # Verify user still exists
-            if payload.get("sub") not in self._users:
+            if not db.get_user(payload.get("sub", "")):
                 return None
             return payload
         except jwt.ExpiredSignatureError:
@@ -96,7 +77,7 @@ class AuthManager:
 
     def get_user(self, username: str) -> dict | None:
         """Get user info (without password hash)."""
-        user = self._users.get(username)
+        user = db.get_user(username)
         if not user:
             return None
         return {
@@ -107,17 +88,10 @@ class AuthManager:
 
     def list_users(self) -> list[dict]:
         """List all users (without password hashes)."""
-        return [
-            {
-                "username": uname,
-                "display_name": data.get("display_name", uname),
-                "created_at": data.get("created_at"),
-            }
-            for uname, data in self._users.items()
-        ]
+        return db.list_users()
 
     def user_exists(self, username: str) -> bool:
-        return username in self._users
+        return db.get_user(username) is not None
 
     def has_users(self) -> bool:
-        return len(self._users) > 0
+        return db.has_users()
