@@ -83,18 +83,30 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_tool_knowledge_user
                 ON memory_tool_knowledge(user_id);
 
+            CREATE TABLE IF NOT EXISTS conversations (
+                conversation_id TEXT PRIMARY KEY,
+                user_id         TEXT NOT NULL,
+                title           TEXT NOT NULL,
+                created_at      TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversations_user
+                ON conversations(user_id);
+
             CREATE TABLE IF NOT EXISTS jobs (
-                job_id       TEXT PRIMARY KEY,
-                user_id      TEXT NOT NULL,
-                goal         TEXT NOT NULL,
-                status       TEXT NOT NULL DEFAULT 'pending',
-                created_at   TEXT NOT NULL,
-                completed_at TEXT,
-                result_json  TEXT,
-                error        TEXT
+                job_id          TEXT PRIMARY KEY,
+                user_id         TEXT NOT NULL,
+                conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id),
+                goal            TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                created_at      TEXT NOT NULL,
+                completed_at    TEXT,
+                result_json     TEXT,
+                error           TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_jobs_user
                 ON jobs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_jobs_conversation
+                ON jobs(conversation_id);
         """)
         conn.commit()
         logger.info(f"Database initialized at {DATABASE_PATH}")
@@ -303,15 +315,61 @@ def remove_tool_knowledge_by_source(user_id: str, source: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Jobs
+# Conversations
 # ---------------------------------------------------------------------------
 
-def create_job(job_id: str, user_id: str, goal: str, status: str = "pending") -> None:
+def create_conversation(conversation_id: str, user_id: str, title: str) -> None:
     conn = _get_conn()
     try:
         conn.execute(
-            "INSERT INTO jobs (job_id, user_id, goal, status, created_at) VALUES (?, ?, ?, ?, ?)",
-            (job_id, user_id, goal, status, datetime.now().isoformat()),
+            "INSERT INTO conversations (conversation_id, user_id, title, created_at) VALUES (?, ?, ?, ?)",
+            (conversation_id, user_id, title, datetime.now().isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_conversation(conversation_id: str) -> dict | None:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE conversation_id = ?", (conversation_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_conversations_for_user(user_id: str) -> list[dict]:
+    """Return conversations newest first, each with job count."""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT c.conversation_id, c.user_id, c.title, c.created_at,
+                      COUNT(j.job_id) as job_count
+               FROM conversations c
+               LEFT JOIN jobs j ON j.conversation_id = c.conversation_id
+               WHERE c.user_id = ?
+               GROUP BY c.conversation_id
+               ORDER BY c.created_at DESC""",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+
+def create_job(job_id: str, user_id: str, conversation_id: str, goal: str, status: str = "pending") -> None:
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO jobs (job_id, user_id, conversation_id, goal, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (job_id, user_id, conversation_id, goal, status, datetime.now().isoformat()),
         )
         conn.commit()
     finally:
@@ -367,6 +425,53 @@ def get_jobs_for_user(user_id: str) -> list[dict]:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+def get_jobs_for_conversation(conversation_id: str) -> list[dict]:
+    """Return all jobs in a conversation, oldest first."""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE conversation_id = ? ORDER BY created_at ASC",
+            (conversation_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_conversation_history(conversation_id: str, limit: int = 3) -> list[dict]:
+    """
+    Return the last N completed jobs in a conversation as {goal, summary} pairs,
+    oldest first. Used to inject conversational context into the orchestrator prompt.
+    Summary is the first 150 chars of final_output.
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT goal, result_json FROM jobs
+               WHERE conversation_id = ? AND status = 'completed'
+               ORDER BY created_at DESC LIMIT ?""",
+            (conversation_id, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    history = []
+    for row in reversed(rows):  # oldest first
+        goal = row["goal"]
+        summary = ""
+        if row["result_json"]:
+            try:
+                result = json.loads(row["result_json"])
+                output = result.get("final_output", "")
+                summary = output[:150].strip()
+                if len(output) > 150:
+                    summary += "..."
+            except Exception:
+                pass
+        history.append({"goal": goal, "summary": summary})
+    return history
 
 
 # ---------------------------------------------------------------------------

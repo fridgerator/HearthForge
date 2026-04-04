@@ -71,9 +71,11 @@ class CreateUserRequest(BaseModel):
 
 class SubmitGoalRequest(BaseModel):
     goal: str
+    conversation_id: str
 
 class JobStatusResponse(BaseModel):
     job_id: str
+    conversation_id: str
     status: str  # "pending", "running", "completed", "failed"
     goal: str
     created_at: str
@@ -83,10 +85,20 @@ class JobStatusResponse(BaseModel):
 
 class JobListItem(BaseModel):
     job_id: str
+    conversation_id: str
     status: str
     goal: str
     created_at: str
     completed_at: str | None = None
+
+class ConversationResponse(BaseModel):
+    conversation_id: str
+    title: str
+    created_at: str
+    job_count: int = 0
+
+class CreateConversationRequest(BaseModel):
+    title: str
 
 class SetPreferenceRequest(BaseModel):
     key: str
@@ -283,6 +295,74 @@ async def get_me(user: Annotated[dict, Depends(get_current_user)]):
     }
 
 
+# --- Conversation Endpoints ---
+
+@app.post("/api/conversations", response_model=ConversationResponse)
+async def create_conversation(
+    req: CreateConversationRequest,
+    user: Annotated[dict, Depends(get_current_user)],
+):
+    """Create a new conversation thread."""
+    conversation_id = str(uuid.uuid4())[:12]
+    db.create_conversation(conversation_id, user_id=user["sub"], title=req.title)
+    conv = db.get_conversation(conversation_id)
+    return ConversationResponse(
+        conversation_id=conv["conversation_id"],
+        title=conv["title"],
+        created_at=conv["created_at"],
+        job_count=0,
+    )
+
+
+@app.get("/api/conversations", response_model=list[ConversationResponse])
+async def list_conversations(
+    user: Annotated[dict, Depends(get_current_user)],
+):
+    """List all conversations for the current user (newest first)."""
+    rows = db.get_conversations_for_user(user["sub"])
+    return [
+        ConversationResponse(
+            conversation_id=r["conversation_id"],
+            title=r["title"],
+            created_at=r["created_at"],
+            job_count=r["job_count"],
+        )
+        for r in rows
+    ]
+
+
+@app.get("/api/conversations/{conversation_id}/jobs", response_model=list[JobStatusResponse])
+async def get_conversation_jobs(
+    conversation_id: str,
+    user: Annotated[dict, Depends(get_current_user)],
+):
+    """Get all jobs in a conversation (oldest first)."""
+    conv = db.get_conversation(conversation_id)
+    if not conv or conv["user_id"] != user["sub"]:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    rows = db.get_jobs_for_conversation(conversation_id)
+    result_list = []
+    for r in rows:
+        result = None
+        if r["result_json"]:
+            try:
+                result = OrchestratorResult(**json.loads(r["result_json"]))
+            except Exception:
+                pass
+        result_list.append(JobStatusResponse(
+            job_id=r["job_id"],
+            conversation_id=r["conversation_id"],
+            status=r["status"],
+            goal=r["goal"],
+            created_at=r["created_at"],
+            completed_at=r["completed_at"],
+            result=result,
+            error=r["error"],
+        ))
+    return result_list
+
+
 # --- Job Endpoints ---
 
 @app.post("/api/jobs", response_model=JobStatusResponse)
@@ -294,18 +374,27 @@ async def submit_goal(
     Submit a goal for async execution. Returns immediately with a job ID.
     Poll /api/jobs/{job_id} for status and results.
     """
-    job_id = str(uuid.uuid4())[:12]
     user_id = user["sub"]
 
-    db.create_job(job_id=job_id, user_id=user_id, goal=req.goal)
+    # Verify conversation belongs to this user
+    conv = db.get_conversation(req.conversation_id)
+    if not conv or conv["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    job_id = str(uuid.uuid4())[:12]
+    db.create_job(job_id=job_id, user_id=user_id, conversation_id=req.conversation_id, goal=req.goal)
+
+    # Fetch prior conversation turns for context
+    history = db.get_conversation_history(req.conversation_id, limit=3)
 
     # Launch the orchestrator as a background task
-    task = asyncio.create_task(_run_job(job_id, user_id, req.goal))
+    task = asyncio.create_task(_run_job(job_id, user_id, req.goal, req.conversation_id, history))
     _running_tasks[job_id] = task
 
     job_row = db.get_job(job_id)
     return JobStatusResponse(
         job_id=job_id,
+        conversation_id=job_row["conversation_id"],
         status=job_row["status"],
         goal=job_row["goal"],
         created_at=job_row["created_at"],
@@ -334,6 +423,7 @@ async def get_job_status(
 
     return JobStatusResponse(
         job_id=job_row["job_id"],
+        conversation_id=job_row["conversation_id"],
         status=job_row["status"],
         goal=job_row["goal"],
         created_at=job_row["created_at"],
@@ -343,32 +433,14 @@ async def get_job_status(
     )
 
 
-@app.get("/api/jobs", response_model=list[JobListItem])
-async def list_jobs(
-    user: Annotated[dict, Depends(get_current_user)],
-):
-    """List all jobs for the current user (most recent first)."""
-    rows = db.get_jobs_for_user(user["sub"])
-    return [
-        JobListItem(
-            job_id=r["job_id"],
-            status=r["status"],
-            goal=r["goal"],
-            created_at=r["created_at"],
-            completed_at=r["completed_at"],
-        )
-        for r in rows
-    ]
-
-
-async def _run_job(job_id: str, user_id: str, goal: str) -> None:
+async def _run_job(job_id: str, user_id: str, goal: str, conversation_id: str, history: list[dict]) -> None:
     """Background task that runs the orchestrator for a job."""
     db.update_job(job_id, status="running")
     client = OllamaClient()
 
     try:
         orchestrator = Orchestrator(client, user_id=user_id)
-        result = await orchestrator.run(goal)
+        result = await orchestrator.run(goal, conversation_history=history)
         db.update_job(
             job_id,
             status="completed",

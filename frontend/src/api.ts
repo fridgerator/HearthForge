@@ -13,8 +13,16 @@ export interface LoginResponse {
   display_name: string
 }
 
+export interface Conversation {
+  conversation_id: string
+  title: string
+  created_at: string
+  job_count: number
+}
+
 export interface JobListItem {
   job_id: string
+  conversation_id: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   goal: string
   created_at: string

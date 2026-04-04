@@ -40,9 +40,12 @@ class Orchestrator:
         self.search = SearchClient()
         self.agent = SubAgent(client, memory=self.memory, search_client=self.search)
 
-    async def run(self, goal: str) -> OrchestratorResult:
+    async def run(self, goal: str, conversation_history: list[dict] | None = None) -> OrchestratorResult:
         """
-        Main entry point. Takes a goal, returns a result.
+        Main entry point. Takes a goal and optional conversation history, returns a result.
+
+        conversation_history is a list of {goal, summary} dicts (oldest first, max 3)
+        representing prior turns in the same conversation.
         """
         start_time = time.time()
 
@@ -53,7 +56,7 @@ class Orchestrator:
         logger.info("=" * 60)
         logger.info("\n📋 Step 1: Decomposing goal into task DAG...")
 
-        dag = await self._decompose_goal(goal)
+        dag = await self._decompose_goal(goal, conversation_history or [])
 
         logger.info(f"   Created {len(dag.tasks)} tasks:")
         for task in dag.tasks:
@@ -72,7 +75,7 @@ class Orchestrator:
 
         # Step 4: Synthesize final output (with memory context)
         logger.info("\n📝 Step 3: Synthesizing final output...")
-        final_output = await self._synthesize(goal, dag)
+        final_output = await self._synthesize(goal, dag, conversation_history or [])
         workspace.write_final_result(final_output)
 
         elapsed = time.time() - start_time
@@ -99,11 +102,12 @@ class Orchestrator:
 
         return result
 
-    async def _decompose_goal(self, goal: str) -> TaskDAG:
+    async def _decompose_goal(self, goal: str, conversation_history: list[dict]) -> TaskDAG:
         """
         Use the LLM to break a goal into a task DAG.
         Memory context is injected so the planner knows about past runs,
         user preferences, and known API issues.
+        Conversation history provides prior turns in the current session.
         """
         # Build the decomposition prompt with memory context
         system_prompt = DECOMPOSE_SYSTEM_PROMPT
@@ -117,10 +121,22 @@ class Orchestrator:
                 f"{memory_context}"
             )
 
+        # Build user message, prepending conversation history if present
+        if conversation_history:
+            history_lines = ["## CONVERSATION HISTORY (prior messages this session):"]
+            for turn in conversation_history:
+                history_lines.append(f"User: {turn['goal']}")
+                if turn.get("summary"):
+                    history_lines.append(f"Assistant: {turn['summary']}")
+            history_lines.append("")
+            history_prefix = "\n".join(history_lines) + "\n"
+        else:
+            history_prefix = ""
+
         try:
             data = await self.client.chat_json(
                 system_prompt=system_prompt,
-                user_message=f"Decompose this goal into tasks:\n\n{goal}",
+                user_message=f"{history_prefix}Decompose this goal into tasks:\n\n{goal}",
                 temperature=0.3,
             )
 
@@ -171,7 +187,7 @@ class Orchestrator:
                 ],
             )
 
-    async def _synthesize(self, goal: str, dag: TaskDAG) -> str:
+    async def _synthesize(self, goal: str, dag: TaskDAG, conversation_history: list[dict]) -> str:
         """
         Take all completed task results and synthesize a final response.
         Includes user preferences from memory so output matches their style.
@@ -200,8 +216,20 @@ class Orchestrator:
                 f"\n\nUser preferences (apply these to your output):\n{pref_lines}"
             )
 
+        if conversation_history:
+            history_lines = ["## CONVERSATION HISTORY (prior messages this session):"]
+            for turn in conversation_history:
+                history_lines.append(f"User: {turn['goal']}")
+                if turn.get("summary"):
+                    history_lines.append(f"Assistant: {turn['summary']}")
+            history_lines.append("")
+            history_prefix = "\n".join(history_lines) + "\n"
+        else:
+            history_prefix = ""
+
         user_message = (
             f"/no_think\n"  # Disable Qwen3 thinking mode — synthesis is writing, not reasoning
+            f"{history_prefix}"
             f"Original goal: {goal}\n\n"
             f"Below are the results from {len(results)} completed sub-tasks. "
             f"Synthesize them into a single coherent response that addresses the original goal.\n\n"

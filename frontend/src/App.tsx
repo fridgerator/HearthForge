@@ -36,7 +36,7 @@ function AppRoutes() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<ChatPage />} />
-        <Route path="/chat/:jobId" element={<ChatPage />} />
+        <Route path="/chat/:conversationId" element={<ChatPage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/preferences" element={<PreferencesPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

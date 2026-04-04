@@ -2,7 +2,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
 import { createApiClient } from '../api'
-import type { JobListItem } from '../api'
+import type { Conversation } from '../api'
 
 export default function Layout() {
   const { currentUser, token, logout } = useAuth()
@@ -10,9 +10,9 @@ export default function Layout() {
   const queryClient = useQueryClient()
   const api = createApiClient(token)
 
-  const { data: jobs } = useQuery({
-    queryKey: ['jobs'],
-    queryFn: () => api.get<JobListItem[]>('/jobs'),
+  const { data: conversations } = useQuery({
+    queryKey: ['conversations'],
+    queryFn: () => api.get<Conversation[]>('/conversations'),
   })
 
   function handleLogout() {
@@ -25,8 +25,7 @@ export default function Layout() {
     navigate('/')
   }
 
-  // Show most recent 20 jobs in sidebar
-  const recentJobs = (jobs ?? []).slice(0, 20)
+  const recentConversations = (conversations ?? []).slice(0, 30)
 
   return (
     <div className="app">
@@ -41,17 +40,17 @@ export default function Layout() {
           <button className="sidebar-new-chat" onClick={handleNewChat}>
             + New Chat
           </button>
-          {recentJobs.length > 0 && (
+          {recentConversations.length > 0 && (
             <div className="sidebar-history">
               <div className="sidebar-section-label">Recent</div>
-              {recentJobs.map(job => (
+              {recentConversations.map(conv => (
                 <NavLink
-                  key={job.job_id}
-                  to={`/chat/${job.job_id}`}
+                  key={conv.conversation_id}
+                  to={`/chat/${conv.conversation_id}`}
                   className="sidebar-history-item"
-                  title={job.goal}
+                  title={conv.title}
                 >
-                  {job.goal.length > 40 ? job.goal.slice(0, 40) + '...' : job.goal}
+                  {conv.title.length > 40 ? conv.title.slice(0, 40) + '...' : conv.title}
                 </NavLink>
               ))}
             </div>
